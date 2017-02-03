@@ -27,7 +27,7 @@ script:
     travis-cargo build &&
     travis-cargo test &&
     travis-cargo doc &&
-    travis-cargo bench &&
+    travis-cargo bench
 after_success:
   # measure code coverage and upload to coveralls.io (the verify
   # argument mitigates kcov crashes due to malformed debuginfo, at the
