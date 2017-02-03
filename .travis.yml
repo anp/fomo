@@ -1,0 +1,39 @@
+language: rust
+cache: cargo
+sudo: false
+os:
+  - linux
+  - osx
+rust:
+  - stable
+  - nightly
+  - beta
+  - 1.15.0
+# addons are needed for kcov + coveralls
+addons:
+  apt:
+    packages:
+      - libcurl4-openssl-dev
+      - libelf-dev
+      - libdw-dev
+      - binutils-dev
+before_script:
+  - |
+    (cargo install rustfmt || true) &&
+    pip install 'travis-cargo<0.2' --user
+script:
+  - |
+    travis-cargo fmt -- --write-mode diff &&
+    travis-cargo build &&
+    travis-cargo test &&
+    travis-cargo doc &&
+    travis-cargo bench &&
+after_success:
+  # measure code coverage and upload to coveralls.io (the verify
+  # argument mitigates kcov crashes due to malformed debuginfo, at the
+  # cost of some speed <https://github.com/huonw/travis-cargo/issues/12>)
+  - travis-cargo coveralls --no-sudo --verify
+env:
+  global:
+    - PATH="$HOME/.cargo/bin:$HOME/.local/bin:$PATH"
+    - TRAVIS_CARGO_NIGHTLY_FEATURE="clippy"
