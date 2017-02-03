@@ -1,0 +1,11 @@
+max_width = 100
+ideal_width = 80
+tab_spaces = 2
+fn_args_layout = "Block"
+struct_trailing_comma = "Always"
+struct_lit_trailing_comma = "Always"
+reorder_imported_names = true
+wrap_comments = true
+normalize_comments = true
+spaces_within_square_brackets = true
+use_try_shorthand = true

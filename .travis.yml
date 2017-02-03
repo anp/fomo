@@ -1,39 +1,99 @@
+# Based on the "trust" template v0.1.1
+# https://github.com/japaric/trust/tree/v0.1.1
+
+dist: trusty
 language: rust
-cache: cargo
-sudo: false
-os:
-  - linux
-  - osx
-rust:
-  - stable
-  - nightly
-  - beta
-  - 1.15.0
-# addons are needed for kcov + coveralls
-addons:
-  apt:
-    packages:
-      - libcurl4-openssl-dev
-      - libelf-dev
-      - libdw-dev
-      - binutils-dev
-before_script:
-  - |
-    (cargo install rustfmt || true) &&
-    pip install 'travis-cargo<0.2' --user
-script:
-  - |
-    travis-cargo fmt -- --write-mode diff &&
-    travis-cargo build &&
-    travis-cargo test &&
-    travis-cargo doc &&
-    travis-cargo bench
-after_success:
-  # measure code coverage and upload to coveralls.io (the verify
-  # argument mitigates kcov crashes due to malformed debuginfo, at the
-  # cost of some speed <https://github.com/huonw/travis-cargo/issues/12>)
-  - travis-cargo coveralls --no-sudo --verify
+services: docker
+sudo: required
+
+# This is the Rust channel that build jobs will use by default but can be
+# overridden on a case by case basis down below
+rust: stable
+
 env:
   global:
-    - PATH="$HOME/.cargo/bin:$HOME/.local/bin:$PATH"
-    - TRAVIS_CARGO_NIGHTLY_FEATURE="clippy"
+    - CRATE_NAME=fomo
+
+    # default job
+    - TARGET=x86_64-unknown-linux-gnu
+
+matrix:
+  include:
+    # Linux
+    - env: TARGET=i686-unknown-linux-gnu
+    - env: TARGET=i686-unknown-linux-musl
+    - env: TARGET=x86_64-unknown-linux-musl
+
+    # OSX
+    - env: TARGET=i686-apple-darwin
+      os: osx
+    - env: TARGET=x86_64-apple-darwin
+      os: osx
+
+    # leaving these in so they won't be forgotten in case we grow BSD support
+    # *BSD
+    #- env: TARGET=i686-unknown-freebsd DISABLE_TESTS=1
+    #- env: TARGET=x86_64-unknown-freebsd DISABLE_TESTS=1
+    #- env: TARGET=x86_64-unknown-netbsd DISABLE_TESTS=1
+
+    # NOTE: b/c we have to rely on QEMU for other architectures, tests are likely
+    # to fail b/c we need to have multiple threads, OS support for inotify, etc.
+
+    # Other architectures
+    #- env: TARGET=aarch64-unknown-linux-gnu
+    #- env: TARGET=armv7-unknown-linux-gnueabihf
+    #- env: TARGET=mips-unknown-linux-gnu
+    #- env: TARGET=mips64-unknown-linux-gnuabi64
+    #- env: TARGET=mips64el-unknown-linux-gnuabi64
+    #- env: TARGET=mipsel-unknown-linux-gnu
+    #- env: TARGET=powerpc-unknown-linux-gnu
+    #- env: TARGET=powerpc64-unknown-linux-gnu
+    #- env: TARGET=powerpc64le-unknown-linux-gnu
+    #- env: TARGET=s390x-unknown-linux-gnu DISABLE_TESTS=1
+
+    # Testing other channels
+    - env: TARGET=x86_64-unknown-linux-gnu
+      rust: nightly
+    - env: TARGET=x86_64-apple-darwin
+      os: osx
+      rust: nightly
+
+before_install: set -e
+
+install:
+  - sh ci/install.sh
+  - source ~/.cargo/env || true
+
+script:
+  - bash ci/script.sh
+
+after_script: set +e
+
+before_deploy:
+  - sh ci/before_deploy.sh
+
+deploy:
+  api_key:
+    secure: m+DDiHQa6YISdsHbP+40YxhTlAHgKneeUB7RafXhRxL+HmnCEJ8RlM8axhMCcTwaeodeKPpT6oN7OphZPiZbxLQ2WOkxiz2/QVTm6XPNFA0pZF60pgHOHW3O3/Etabuwz8/nSmwPtg9zA33zDjLyweWvDPIDAJz3T5kOuu6nAzNoSaNDe+5K0OsnfbS3mK7L4CqRKDLI4W/teTIx4sq5xZlNqHYbr++JDTmWGQ05N+9RUFMUXza5Upn1/wtpqQxu1y6HnEyxgIyP7/4GX3eWTDtkyWXiJ7Os1DeKh9TP+GVWQBCK6h6XG/p35Bf8ekAW7DWbSnwEJFtvuN/pQKh4kNGPbN2Ri/Z0Mqos+YEvVh/eMv3Cbvs5qZY/pAAu7LyF7XwZDKWQLQiAVYmgsgTWSNRgK7M9/VnIbvjxTbEbR+NquTqE31agyUILv1LZWPYldsBBMRuhLdLZLNM3ZuRsxbk5Cxg3dJIFbAgrJug413DEZbeGl5vCPwL7e1Wjdxluu+hfD6sjuDFE37QaKpe7qEs/4tXARAf44fo2Ek47uNJ7C6wdxOaRy8Yq8nd8ZDuBLE2ijoLHKXwvVFYxhC8Xr8DOh9wEH+LWwYjU64avruv6XZX/VMLoinwMRw7IusvRDmTXWyjYhBXYmDQk6rPqKx0L2/xx0HwJcz/k44FjhYo=
+  file_glob: true
+  file: $CRATE_NAME-$TRAVIS_TAG-$TARGET.*
+  on:
+    condition: $TRAVIS_RUST_VERSION = stable
+    tags: true
+  provider: releases
+  skip_cleanup: true
+
+cache: cargo
+before_cache:
+  # Travis can't cache files that are not readable by "others"
+  - chmod -R a+r $HOME/.cargo
+
+branches:
+  only:
+    # release tags
+    - /^v\d+\.\d+\.\d+.*$/
+    - master
+
+notifications:
+  email:
+    on_success: never
