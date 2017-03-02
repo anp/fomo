@@ -1,5 +1,5 @@
 max_width = 100
-ideal_width = 80
+ideal_width = 90
 tab_spaces = 2
 fn_args_layout = "Block"
 struct_trailing_comma = "Always"
