@@ -2,9 +2,15 @@
 name = "fomo"
 version = "0.1.0"
 authors = ["Adam Perry <adam.n.perry@gmail.com>"]
+description = "A file-watcher for JavaScript build tools."
 
 [dependencies]
-clippy = {version = "*", optional = true}
+chrono = { version = "^0.3.0", features = ["serde"] }
+clap = { version = "^2.20.5", features = ["wrap_help"] }
+serde = "^0.9.6"
+serde_derive = "^0.9.6"
+serde_json = "^0.9.6"
+walkdir = "^1.0.7"
 
-[features]
-default = []
+[dev-dependencies]
+tempdir = "^0.3.5"
