@@ -15,8 +15,6 @@ pub struct FsNode {
   basename: String,
   entry: FsEntryType,
   mtime: DateTime<Local>,
-  atime: DateTime<Local>,
-  birthtime: DateTime<Local>,
 }
 
 #[derive(Debug, Serialize)]
@@ -29,8 +27,6 @@ impl FsRootNode {
       basename: String::new(),
       entry: FsEntryType::Directory { children: BTreeMap::new(), },
       mtime: Local::now(),
-      atime: Local::now(),
-      birthtime: Local::now(),
     })
   }
 
@@ -100,8 +96,6 @@ impl FsNode {
       basename: dirname,
       entry: FsEntryType::Directory { children: BTreeMap::new(), },
       mtime: Local::now(),
-      atime: Local::now(),
-      birthtime: Local::now(),
     }
   }
 
@@ -133,8 +127,6 @@ impl FsNode {
       basename: basename,
       entry: entry_ty,
       mtime: system_time_to_date_time(metadata.modified()?),
-      atime: system_time_to_date_time(metadata.accessed()?),
-      birthtime: system_time_to_date_time(metadata.created()?),
     })
   }
 }
