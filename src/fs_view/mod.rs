@@ -35,7 +35,9 @@ impl FsRootNode {
     for entry in WalkDir::new(path) {
       let entry = entry?;
       let mut parent = {
-        let components = entry.path().components();
+        let mut components = entry.path().components();
+        // we need to remove the final element from the path, as it corresponds to the DirEntry
+        components.next_back();
         let path_buffer = PathBuf::new();
 
         self.0.ensure_and_return_parent(path_buffer, components)?
@@ -86,7 +88,7 @@ impl FsNode {
         _ => panic!("Files should not exist in the middle of a path component."),
       }
     } else {
-      return Ok(self);
+      Ok(self)
     }
   }
 
