@@ -462,10 +462,14 @@ mod test {
                               empty_dir_path.clone(),
                               empty_file_path.clone(),
                               single_byte_file_path.clone(),
-                              twenty_two_byte_file_path.clone(),
-                              symlinks_path,
-                              symlink_to_file_path.clone(),
-                              symlink_to_dir_path.clone() ];
+                              twenty_two_byte_file_path.clone() ];
+
+      #[cfg(not(windows))]
+      {
+        to_find.push(symlinks_path);
+        to_find.push(symlink_to_file_path.clone());
+        to_find.push(symlink_to_dir_path.clone());
+      }
       to_find.sort();
       to_find
     };
@@ -514,25 +518,28 @@ mod test {
       mtime: Local::now(),
     });
 
-    root_node.insert_node(FsNode {
-      path: symlink_to_file_path,
-      basename: String::from("symlink_to_file"),
-      entry: FsEntryType::Symlink {
-        target: PathBuf::from(symlink_target_paths::FILE),
-        ty: FsItemType::File,
-      },
-      mtime: Local::now(),
-    });
+    #[cfg(not(windows))]
+    {
+      root_node.insert_node(FsNode {
+        path: symlink_to_file_path,
+        basename: String::from("symlink_to_file"),
+        entry: FsEntryType::Symlink {
+          target: PathBuf::from(symlink_target_paths::FILE),
+          ty: FsItemType::File,
+        },
+        mtime: Local::now(),
+      });
 
-    root_node.insert_node(FsNode {
-      path: symlink_to_dir_path,
-      basename: String::from("symlink_to_dir"),
-      entry: FsEntryType::Symlink {
-        target: PathBuf::from(symlink_target_paths::DIRECTORY),
-        ty: FsItemType::Directory,
-      },
-      mtime: Local::now(),
-    });
+      root_node.insert_node(FsNode {
+        path: symlink_to_dir_path,
+        basename: String::from("symlink_to_dir"),
+        entry: FsEntryType::Symlink {
+          target: PathBuf::from(symlink_target_paths::DIRECTORY),
+          ty: FsItemType::Directory,
+        },
+        mtime: Local::now(),
+      });
+    }
 
     // write to disk
     let res = root_node.0.mirror_to_disk();
