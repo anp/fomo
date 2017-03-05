@@ -13,8 +13,15 @@
 
 //#![warn(missing_docs)]
 
+// error-chain can go pretty deep
+#![recursion_limit = "1024"]
+
 extern crate chrono;
 extern crate clap;
+#[macro_use]
+extern crate error_chain;
+#[macro_use]
+extern crate lazy_static;
 extern crate serde;
 #[macro_use]
 extern crate serde_derive;
@@ -22,18 +29,28 @@ extern crate serde_json;
 extern crate walkdir;
 
 #[cfg(test)]
+#[macro_use]
+extern crate quickcheck;
+#[cfg(test)]
 extern crate tempdir;
 
 use clap::{App, Arg};
 use std::path::Path;
 
 // mod command;
-mod error;
+
+mod errors {
+  // Create the Error, ErrorKind, ResultExt, and Result types
+  error_chain!{}
+}
+
 mod fs_view;
 mod query;
 mod times;
 
-fn main() {
+use errors::*;
+
+fn run() -> Result<()> {
   // TODO print a single JSON item describing the startup & use of a port/socket/etc
   let before_help_msg = "If no flags are specified, a default set of listeners will be selected \
 and printed in the startup message.";
@@ -65,7 +82,12 @@ and printed in the startup message.";
 
   println!("{}",
            serde_json::to_string_pretty(&root).expect("couldn't serialize"));
+
+  Ok(())
 }
+
+// TODO(dikaiosune) write a catch_panic facade that restarts everything
+quick_main!(run);
 
 #[derive(Deserialize, Serialize)]
 struct StartupMessage {

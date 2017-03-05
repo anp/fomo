@@ -1,15 +1,20 @@
+use std;
 use std::collections::BTreeMap;
-use std::fs::{DirEntry, Metadata};
+use std::fmt::Display;
+use std::fs::{DirEntry, read_link};
 use std::path::{Components, Path, PathBuf};
 
 use chrono::{DateTime, Local};
 use walkdir;
 use walkdir::WalkDir;
 
-use error::*;
+use errors::*;
 use times::system_time_to_date_time;
 
-#[derive(Debug, Eq, PartialEq, Serialize)]
+#[cfg(test)]
+use std::fs::{OpenOptions, create_dir_all};
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct FsNode {
   path: PathBuf,
   basename: String,
@@ -25,15 +30,15 @@ impl FsRootNode {
     FsRootNode(FsNode {
       path: PathBuf::from(""),
       basename: String::new(),
-      entry: FsEntryType::Directory { children: BTreeMap::new(), },
+      entry: FsEntryType::RootRoot { children: BTreeMap::new(), },
       mtime: Local::now(),
     })
   }
 
-  pub fn add_root(&mut self, path: &Path) -> FomoResult<()> {
+  pub fn add_root(&mut self, path: &Path) -> Result<()> {
 
     for entry in WalkDir::new(path) {
-      let entry = entry?;
+      let entry = entry.chain_err(|| "unable to fetch walkdir entry")?;
       let mut parent = {
         let mut components = entry.path().components();
         // we need to remove the final element from the path, as it corresponds to the DirEntry
@@ -44,7 +49,6 @@ impl FsRootNode {
       };
 
       {
-
         let new_node = FsNode::try_from_node_source(entry)?;
         let basename = new_node.basename.to_owned();
 
@@ -59,6 +63,24 @@ impl FsRootNode {
 
     Ok(())
   }
+
+  #[cfg(test)]
+  pub fn insert_node(&mut self, node: FsNode) -> Result<()> {
+    let basename = node.basename.clone();
+    let path = node.path.clone();
+    let mut components = path.components();
+    components.next_back();
+    match self.0
+      .ensure_and_return_parent(PathBuf::new(), components)
+      .chain_err(|| "unable to ensure parent for new node insertion")?
+      .entry {
+
+      FsEntryType::RootRoot { ref mut children } |
+      FsEntryType::Directory { ref mut children } => children.insert(basename, node),
+      _ => panic!("Found a non-directory node when ensuring parent of a node was in the tree"),
+    };
+    Ok(())
+  }
 }
 
 impl FsNode {
@@ -67,7 +89,7 @@ impl FsNode {
     &'a mut self,
     mut path_so_far: PathBuf,
     mut components: Components<'b>
-  ) -> FomoResult<&'a mut FsNode> {
+  ) -> Result<&'a mut FsNode> {
 
     let component = components.next();
 
@@ -75,12 +97,13 @@ impl FsNode {
 
       let comp_str = match c.as_os_str().to_str() {
         Some(s) => s,
-        None => return Err(FomoError::Internal("non unicode filename found")),
+        None => bail!("non unicode filename found"),
       };
       path_so_far.push(comp_str);
 
       match self.entry {
-        FsEntryType::Directory { ref mut children } => {
+        FsEntryType::Directory { ref mut children } |
+        FsEntryType::RootRoot { ref mut children } => {
           children.entry(comp_str.to_owned())
             .or_insert_with(|| FsNode::empty_dir(path_so_far.clone(), comp_str.to_owned()))
             .ensure_and_return_parent(path_so_far, components)
@@ -101,47 +124,242 @@ impl FsNode {
     }
   }
 
-  pub fn try_from_node_source<S: NodeSource>(entry: S) -> FomoResult<Self> {
+  pub fn try_from_node_source<S: NodeSource>(entry: S) -> Result<Self> {
 
     let basename = match entry.path().file_name() {
       Some(n) => {
         match n.to_str() {
           Some(b) => b.to_owned(),
-          None => return Err(FomoError::Internal("non-unicode filename")),
+          None => bail!("non-unicode filename"),
         }
       }
-      None => return Err(FomoError::Internal("walkdir gave us a relative path")),
+      None => bail!("walkdir gave us a relative path"),
     };
 
     let metadata = entry.metadata()?;
 
-    let entry_ty = if metadata.is_dir() {
-      FsEntryType::Directory { children: BTreeMap::new(), }
-    } else if metadata.is_file() {
-      FsEntryType::File { len: metadata.len(), }
-    } else {
-      // FIXME(dikaiosune) this doesn't handle links or other entry types
-      unreachable!()
+    let file_type = metadata.ty;
+    let entry_ty = match file_type {
+      FsItemType::Directory => FsEntryType::Directory { children: BTreeMap::new(), },
+      FsItemType::File => FsEntryType::File { len: metadata.len, },
+      FsItemType::SymlinkUgh => {
+        let sym_path = read_link(entry.path()).chain_err(|| "unable to read through symlink")?;
+        let sym_meta = sym_path.metadata()
+          .chain_err(|| format!("unable to read symlink target's ({:?}) metadata", sym_path))?;
+        let sym_target_type = if sym_meta.file_type().is_file() {
+          FsItemType::File
+        } else if sym_meta.file_type().is_dir() {
+          FsItemType::Directory
+        } else if sym_meta.file_type().is_symlink() {
+          FsItemType::SymlinkUgh
+        } else {
+          FsItemType::Other
+        };
+
+        FsEntryType::Symlink {
+          target: sym_path,
+          ty: sym_target_type,
+        }
+      }
+      FsItemType::Other => {
+        panic!("This is only ever used when reading symlink targets, this is a bug.");
+      }
     };
 
     Ok(FsNode {
       path: entry.path(),
       basename: basename,
       entry: entry_ty,
-      mtime: system_time_to_date_time(metadata.modified()?),
+      mtime: metadata.mtime,
     })
+  }
+
+  /// WARNING: Only call this in tests when you've carefully constructed a tree inside a
+  /// temporary directory. Potentially destructive, and not easily reversed.
+  ///
+  /// Also, requires that the process has `SeCreateSymbolicLinkPrivilege`.
+  #[cfg(test)]
+  fn mirror_to_disk(&self) -> Result<()> {
+    match self.entry {
+      FsEntryType::RootRoot { ref children } => {
+        for child in children.values() {
+          child.mirror_to_disk()?;
+        }
+      }
+      FsEntryType::Directory { ref children } => {
+        create_dir_all(&self.path).chain_err(|| "unable to recursively create directories")?;
+
+        for (_, child) in children {
+          child.mirror_to_disk()?
+        }
+      }
+      FsEntryType::File { len } => {
+        println!("attempting to create file {:?}", &self.path);
+        let file = OpenOptions::new().read(true)
+          .write(true)
+          .create(true)
+          .open(&self.path)
+          .chain_err(|| "unable to open/create file")?;
+        file.set_len(len).chain_err(|| "unable to set file length")?;
+      }
+      FsEntryType::Symlink { ref target, ty } => {
+        make_symlink(target, &self.path, ty)?;
+      }
+    }
+    Ok(())
+  }
+
+  #[cfg(test)]
+  fn assert_eq_with_mtime_epsilon(&self, other: &FsNode, acceptable_time_gap_millis: i64) {
+    if self.path != other.path {
+      panic!("paths are not equal\nlhs: {:?}\nrhs: {:?}", self, other);
+    }
+
+    if self.basename != other.basename {
+      panic!("basenames are not equal\nlhs: {:?}\nrhs: {:?}", self, other);
+    }
+
+    if self.mtime.signed_duration_since(other.mtime).num_milliseconds().abs() >
+       acceptable_time_gap_millis {
+      panic!("mtimes are not equal (w/in {:?} tolerance): {} and {}\nlhs:{:?}\nrhs:{:?}",
+             acceptable_time_gap_millis,
+             self.mtime,
+             other.mtime,
+             self,
+             other);
+    }
+
+    match (&self.entry, &other.entry) {
+      (&FsEntryType::File { len: len1 }, &FsEntryType::File { len: len2 }) => {
+        if len1 != len2 {
+          panic!("file lengths are not equal\nlhs: {:?}\nrhs: {:?}",
+                 self,
+                 other);
+        }
+      }
+      (&FsEntryType::RootRoot { children: ref children1 },
+       &FsEntryType::RootRoot { children: ref children2 }) |
+      (&FsEntryType::Directory { children: ref children1 },
+       &FsEntryType::Directory { children: ref children2 }) => {
+
+        // these are btreemaps so will have the same sort order
+        for ((basename1, child1), (basename2, child2)) in children1.iter().zip(children2.iter()) {
+          if basename1 != basename2 {
+            panic!("children basenames are not equal\nlhs: {:?}\nrhs: {:?}",
+                   child1,
+                   child2);
+          }
+          child1.assert_eq_with_mtime_epsilon(child2, acceptable_time_gap_millis);
+        }
+      }
+
+      (&FsEntryType::Symlink { target: ref target1, ty: ty1 },
+       &FsEntryType::Symlink { target: ref target2, ty: ty2 }) => {
+        if ty1 != ty2 {
+          panic!("symlink types are not equal\nlhs: {:?}\nrhs: {:?}",
+                 self,
+                 other);
+        }
+
+        if target1 != target2 {
+          panic!("symlink targets are not equal\nlhs: {:?}\nrhs: {:?}",
+                 self,
+                 other);
+        }
+      }
+      _ => {
+        panic!("node entry types are not equal\nlhs: {:?}\nrhs: {:?}",
+               self,
+               other)
+      }
+    }
+  }
+
+  fn format_into_buffer(&self, buf: &mut String, depth: u32) {
+    for _ in 0..(depth * 2) {
+      buf.push(' ');
+    }
+
+    buf.push_str(&self.basename);
+
+    match &self.entry {
+      &FsEntryType::RootRoot { ref children } |
+      &FsEntryType::Directory { ref children } => {
+        buf.push('\n');
+        for (_, child) in children {
+          child.format_into_buffer(buf, depth + 1);
+        }
+      }
+      &FsEntryType::File { len } => {
+        let node_md_str = format!(" {} {}\n", len, self.mtime);
+        buf.push_str(&node_md_str);
+      }
+      &FsEntryType::Symlink { ref target, ty } => {
+        let node_md_str = format!(" -> {:?} ({:?})\n", target, ty);
+        buf.push_str(&node_md_str);
+      }
+    }
   }
 }
 
-#[derive(Debug, Eq, PartialEq, Serialize)]
+impl Display for FsNode {
+  fn fmt(&self, f: &mut std::fmt::Formatter) -> std::result::Result<(), std::fmt::Error> {
+    let mut buf = String::new();
+
+    self.format_into_buffer(&mut buf, 0);
+
+    let _ = f.write_str(&buf);
+
+    Ok(())
+  }
+}
+
+#[cfg(all(test, not(windows)))]
+#[allow(unused_variables)]
+fn make_symlink(src: &Path, dst: &Path, ty: FsItemType) -> Result<()> {
+  use std::os::unix::fs::symlink;
+  Ok(symlink(src, dst).chain_err(|| "unable to create symlink")?)
+}
+
+#[cfg(all(test, windows))]
+fn make_symlink(src: &Path, dst: &Path, ty: FsItemType) -> Result<()> {
+  use std::os::windows::fs::{symlink_dir, symlink_file};
+  match ty {
+    SymlinkType::Directory => {
+      Ok(symlink_dir(src, dst).chain_err(|| "unable to create directory symlink")?)
+    }
+    SymlinkType::File | SymlinkType::SymlinkUgh => {
+      Ok(symlink_file(src, dst).chain_err(|| "unable to create file symlink")?)
+    }
+  }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub enum FsEntryType {
   Directory { children: BTreeMap<String, FsNode>, },
   File { len: u64, },
+  Symlink { target: PathBuf, ty: FsItemType, },
+  // different than a root path element (thanks, windows)
+  RootRoot { children: BTreeMap<String, FsNode>, },
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+pub enum FsItemType {
+  File,
+  Directory,
+  SymlinkUgh,
+  Other,
+}
+
+pub struct MetadataFromFs {
+  ty: FsItemType,
+  mtime: DateTime<Local>,
+  len: u64,
 }
 
 pub trait NodeSource {
   fn path(&self) -> PathBuf;
-  fn metadata(&self) -> FomoResult<Metadata>;
+  fn metadata(&self) -> Result<MetadataFromFs>;
 }
 
 impl NodeSource for walkdir::DirEntry {
@@ -149,8 +367,23 @@ impl NodeSource for walkdir::DirEntry {
     self.path().to_path_buf()
   }
 
-  fn metadata(&self) -> FomoResult<Metadata> {
-    Ok(self.metadata()?)
+  fn metadata(&self) -> Result<MetadataFromFs> {
+    let md = self.metadata().chain_err(|| "unable to read file metadata")?;
+    let mtime = system_time_to_date_time(md.modified()
+      .chain_err(|| "unable to read modification time")?);
+
+
+    Ok(MetadataFromFs {
+      mtime: mtime,
+      len: md.len(),
+      ty: if md.is_file() {
+        FsItemType::File
+      } else if md.is_dir() {
+        FsItemType::Directory
+      } else {
+        FsItemType::SymlinkUgh
+      },
+    })
   }
 }
 
@@ -159,19 +392,182 @@ impl NodeSource for DirEntry {
     self.path()
   }
 
-  fn metadata(&self) -> FomoResult<Metadata> {
-    Ok(self.metadata()?)
+  fn metadata(&self) -> Result<MetadataFromFs> {
+    let md = self.metadata().chain_err(|| "unable to read file metadata")?;
+    let mtime = system_time_to_date_time(md.modified()
+      .chain_err(|| "unable to read file modified time")?);
+
+    Ok(MetadataFromFs {
+      mtime: mtime,
+      len: md.len(),
+      ty: if md.is_file() {
+        FsItemType::File
+      } else if md.is_dir() {
+        FsItemType::Directory
+      } else {
+        FsItemType::SymlinkUgh
+      },
+    })
   }
 }
 
 #[cfg(test)]
 mod test {
+  use chrono::{DateTime, Local};
+  use std;
   use std::fs::File;
   use std::io::prelude::*;
+  use std::path::PathBuf;
   use tempdir::TempDir;
   use walkdir::WalkDir;
 
-  use super::{FsEntryType, FsNode};
+  use errors::*;
+  use super::*;
+
+  #[cfg(not(windows))]
+  mod symlink_target_paths {
+    pub const FILE: &'static str = "/bin/bash";
+    pub const DIRECTORY: &'static str = "/usr";
+  }
+
+  #[cfg(windows)]
+  mod symlink_target_paths {
+    pub const FILE: &'static str = "C:\\Windows\\explorer.exe";
+    pub const DIRECTORY: &'static str = "C:\\Windows";
+  }
+
+  #[test]
+  fn fixed_roundtrip() {
+    let start_time = Local::now();
+    let tmp = TempDir::new("mirroring").expect("couldn't create temp dir");
+    // make the fake filesystem, keeping a list of paths created
+    let many_child_dir_path = tmp.path().join("many_child_dir");
+    let single_child_dir_path = many_child_dir_path.join("single_child_dir");
+    let empty_dir_path = many_child_dir_path.join("empty_dir");
+
+    let empty_file_path = single_child_dir_path.join("empty_file");
+    let single_byte_file_path = many_child_dir_path.join("single_byte_file");
+    let twenty_two_byte_file_path = many_child_dir_path.join("twenty_two_byte_file");
+
+    let symlinks_path = many_child_dir_path.join("symlinks");
+    let symlink_to_file_path = symlinks_path.join("symlink_to_file");
+    let symlink_to_dir_path = symlinks_path.join("symlink_to_dir");
+
+    let to_find = {
+      let mut to_find = vec![ tmp.path().to_path_buf(),
+                              many_child_dir_path.clone(),
+                              single_child_dir_path.clone(),
+                              empty_dir_path.clone(),
+                              empty_file_path.clone(),
+                              single_byte_file_path.clone(),
+                              twenty_two_byte_file_path.clone(),
+                              symlinks_path,
+                              symlink_to_file_path.clone(),
+                              symlink_to_dir_path.clone() ];
+      to_find.sort();
+      to_find
+    };
+
+    let mut root_node = FsRootNode::new();
+
+    root_node.insert_node(FsNode {
+      path: many_child_dir_path,
+      basename: String::from("many_child_dir"),
+      entry: FsEntryType::Directory { children: BTreeMap::new(), },
+      mtime: Local::now(),
+    });
+
+    root_node.insert_node(FsNode {
+      path: single_child_dir_path,
+      basename: String::from("single_child_dir"),
+      entry: FsEntryType::Directory { children: BTreeMap::new(), },
+      mtime: Local::now(),
+    });
+
+    root_node.insert_node(FsNode {
+      path: empty_dir_path,
+      basename: String::from("empty_dir"),
+      entry: FsEntryType::Directory { children: BTreeMap::new(), },
+      mtime: Local::now(),
+    });
+
+    root_node.insert_node(FsNode {
+      path: empty_file_path,
+      basename: String::from("empty_file"),
+      entry: FsEntryType::File { len: 0, },
+      mtime: Local::now(),
+    });
+
+    root_node.insert_node(FsNode {
+      path: single_byte_file_path,
+      basename: String::from("single_byte_file"),
+      entry: FsEntryType::File { len: 1, },
+      mtime: Local::now(),
+    });
+
+    root_node.insert_node(FsNode {
+      path: twenty_two_byte_file_path,
+      basename: String::from("twenty_two_byte_file"),
+      entry: FsEntryType::File { len: 22, },
+      mtime: Local::now(),
+    });
+
+    root_node.insert_node(FsNode {
+      path: symlink_to_file_path,
+      basename: String::from("symlink_to_file"),
+      entry: FsEntryType::Symlink {
+        target: PathBuf::from(symlink_target_paths::FILE),
+        ty: FsItemType::File,
+      },
+      mtime: Local::now(),
+    });
+
+    root_node.insert_node(FsNode {
+      path: symlink_to_dir_path,
+      basename: String::from("symlink_to_dir"),
+      entry: FsEntryType::Symlink {
+        target: PathBuf::from(symlink_target_paths::DIRECTORY),
+        ty: FsItemType::Directory,
+      },
+      mtime: Local::now(),
+    });
+
+    // write to disk
+    let res = root_node.0.mirror_to_disk();
+    match res {
+      Ok(_) => (),
+      Err(why) => {
+        println!("{:#?}", root_node);
+        panic!("unable to write tree to disk: {:?}", why);
+      }
+    }
+
+    // figure there's maybe a second of wobble on either side in addition to however slowly
+    // this test has run so far
+    let acceptable_epsilon =
+      Local::now().signed_duration_since(start_time).num_milliseconds().abs() + 1000;
+
+    // assemble list of paths from walkdir
+    let mut found_items = WalkDir::new(tmp.path())
+      .into_iter()
+      .map(|r| r.expect("unable to read from walkdir iterator").path().to_path_buf())
+      .collect::<Vec<_>>();
+
+    found_items.sort();
+    assert_eq!(to_find, found_items);
+
+    println!("found files: {:#?}", found_items);
+
+    // construct a fsrootnode, see if we round-tripped correctly
+    let mut second_root_node = FsRootNode::new();
+    second_root_node.add_root(tmp.path()).expect("unable to construct pair fs view");
+
+    println!("root: {}\n\nsecond_root: {}",
+             root_node.0,
+             second_root_node.0);
+
+    root_node.0.assert_eq_with_mtime_epsilon(&second_root_node.0, acceptable_epsilon)
+  }
 
   #[test]
   fn single_file_tmp_dir() {
