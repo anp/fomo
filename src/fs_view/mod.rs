@@ -63,24 +63,6 @@ impl FsRootNode {
 
     Ok(())
   }
-
-  #[cfg(test)]
-  pub fn insert_node(&mut self, node: FsNode) -> Result<()> {
-    let basename = node.basename.clone();
-    let path = node.path.clone();
-    let mut components = path.components();
-    components.next_back();
-    match self.0
-      .ensure_and_return_parent(PathBuf::new(), components)
-      .chain_err(|| "unable to ensure parent for new node insertion")?
-      .entry {
-
-      FsEntryType::RootRoot { ref mut children } |
-      FsEntryType::Directory { ref mut children } => children.insert(basename, node),
-      _ => panic!("Found a non-directory node when ensuring parent of a node was in the tree"),
-    };
-    Ok(())
-  }
 }
 
 impl FsNode {
@@ -172,107 +154,6 @@ impl FsNode {
       entry: entry_ty,
       mtime: metadata.mtime,
     })
-  }
-
-  /// WARNING: Only call this in tests when you've carefully constructed a tree inside a
-  /// temporary directory. Potentially destructive, and not easily reversed.
-  ///
-  /// Also, requires that the process has `SeCreateSymbolicLinkPrivilege`.
-  #[cfg(test)]
-  fn mirror_to_disk(&self) -> Result<()> {
-    match self.entry {
-      FsEntryType::RootRoot { ref children } => {
-        for child in children.values() {
-          child.mirror_to_disk()?;
-        }
-      }
-      FsEntryType::Directory { ref children } => {
-        create_dir_all(&self.path).chain_err(|| "unable to recursively create directories")?;
-
-        for (_, child) in children {
-          child.mirror_to_disk()?
-        }
-      }
-      FsEntryType::File { len } => {
-        println!("attempting to create file {:?}", &self.path);
-        let file = OpenOptions::new().read(true)
-          .write(true)
-          .create(true)
-          .open(&self.path)
-          .chain_err(|| "unable to open/create file")?;
-        file.set_len(len).chain_err(|| "unable to set file length")?;
-      }
-      FsEntryType::Symlink { ref target, ty } => {
-        make_symlink(target, &self.path, ty)?;
-      }
-    }
-    Ok(())
-  }
-
-  #[cfg(test)]
-  fn assert_eq_with_mtime_epsilon(&self, other: &FsNode, acceptable_time_gap_millis: i64) {
-    if self.path != other.path {
-      panic!("paths are not equal\nlhs: {:?}\nrhs: {:?}", self, other);
-    }
-
-    if self.basename != other.basename {
-      panic!("basenames are not equal\nlhs: {:?}\nrhs: {:?}", self, other);
-    }
-
-    if self.mtime.signed_duration_since(other.mtime).num_milliseconds().abs() >
-       acceptable_time_gap_millis {
-      panic!("mtimes are not equal (w/in {:?} tolerance): {} and {}\nlhs:{:?}\nrhs:{:?}",
-             acceptable_time_gap_millis,
-             self.mtime,
-             other.mtime,
-             self,
-             other);
-    }
-
-    match (&self.entry, &other.entry) {
-      (&FsEntryType::File { len: len1 }, &FsEntryType::File { len: len2 }) => {
-        if len1 != len2 {
-          panic!("file lengths are not equal\nlhs: {:?}\nrhs: {:?}",
-                 self,
-                 other);
-        }
-      }
-      (&FsEntryType::RootRoot { children: ref children1 },
-       &FsEntryType::RootRoot { children: ref children2 }) |
-      (&FsEntryType::Directory { children: ref children1 },
-       &FsEntryType::Directory { children: ref children2 }) => {
-
-        // these are btreemaps so will have the same sort order
-        for ((basename1, child1), (basename2, child2)) in children1.iter().zip(children2.iter()) {
-          if basename1 != basename2 {
-            panic!("children basenames are not equal\nlhs: {:?}\nrhs: {:?}",
-                   child1,
-                   child2);
-          }
-          child1.assert_eq_with_mtime_epsilon(child2, acceptable_time_gap_millis);
-        }
-      }
-
-      (&FsEntryType::Symlink { target: ref target1, ty: ty1 },
-       &FsEntryType::Symlink { target: ref target2, ty: ty2 }) => {
-        if ty1 != ty2 {
-          panic!("symlink types are not equal\nlhs: {:?}\nrhs: {:?}",
-                 self,
-                 other);
-        }
-
-        if target1 != target2 {
-          panic!("symlink targets are not equal\nlhs: {:?}\nrhs: {:?}",
-                 self,
-                 other);
-        }
-      }
-      _ => {
-        panic!("node entry types are not equal\nlhs: {:?}\nrhs: {:?}",
-               self,
-               other)
-      }
-    }
   }
 
   fn format_into_buffer(&self, buf: &mut String, depth: u32) {
@@ -425,6 +306,126 @@ mod test {
 
   use errors::*;
   use super::*;
+
+  impl FsRootNode {
+    pub fn insert_node(&mut self, node: FsNode) -> Result<()> {
+      let basename = node.basename.clone();
+      let path = node.path.clone();
+      let mut components = path.components();
+      components.next_back();
+      match self.0
+        .ensure_and_return_parent(PathBuf::new(), components)
+        .chain_err(|| "unable to ensure parent for new node insertion")?
+        .entry {
+
+        FsEntryType::RootRoot { ref mut children } |
+        FsEntryType::Directory { ref mut children } => children.insert(basename, node),
+        _ => panic!("Found a non-directory node when ensuring parent of a node was in the tree"),
+      };
+      Ok(())
+    }
+  }
+
+  impl FsNode {
+    /// WARNING: Only call this in tests when you've carefully constructed a tree inside a
+    /// temporary directory. Potentially destructive, and not easily reversed.
+    ///
+    /// Also, requires that the process has `SeCreateSymbolicLinkPrivilege`.
+    fn mirror_to_disk(&self) -> Result<()> {
+      match self.entry {
+        FsEntryType::RootRoot { ref children } => {
+          for child in children.values() {
+            child.mirror_to_disk()?;
+          }
+        }
+        FsEntryType::Directory { ref children } => {
+          create_dir_all(&self.path).chain_err(|| "unable to recursively create directories")?;
+
+          for (_, child) in children {
+            child.mirror_to_disk()?
+          }
+        }
+        FsEntryType::File { len } => {
+          println!("attempting to create file {:?}", &self.path);
+          let file = OpenOptions::new().read(true)
+            .write(true)
+            .create(true)
+            .open(&self.path)
+            .chain_err(|| "unable to open/create file")?;
+          file.set_len(len).chain_err(|| "unable to set file length")?;
+        }
+        FsEntryType::Symlink { ref target, ty } => {
+          make_symlink(target, &self.path, ty)?;
+        }
+      }
+      Ok(())
+    }
+
+    fn assert_eq_with_mtime_epsilon(&self, other: &FsNode, acceptable_time_gap_millis: i64) {
+      if self.path != other.path {
+        panic!("paths are not equal\nlhs: {:?}\nrhs: {:?}", self, other);
+      }
+
+      if self.basename != other.basename {
+        panic!("basenames are not equal\nlhs: {:?}\nrhs: {:?}", self, other);
+      }
+
+      if self.mtime.signed_duration_since(other.mtime).num_milliseconds().abs() >
+         acceptable_time_gap_millis {
+        panic!("mtimes are not equal (w/in {:?} tolerance): {} and {}\nlhs:{:?}\nrhs:{:?}",
+               acceptable_time_gap_millis,
+               self.mtime,
+               other.mtime,
+               self,
+               other);
+      }
+
+      match (&self.entry, &other.entry) {
+        (&FsEntryType::File { len: len1 }, &FsEntryType::File { len: len2 }) => {
+          if len1 != len2 {
+            panic!("file lengths are not equal\nlhs: {:?}\nrhs: {:?}",
+                   self,
+                   other);
+          }
+        }
+        (&FsEntryType::RootRoot { children: ref children1 },
+         &FsEntryType::RootRoot { children: ref children2 }) |
+        (&FsEntryType::Directory { children: ref children1 },
+         &FsEntryType::Directory { children: ref children2 }) => {
+
+          // these are btreemaps so will have the same sort order
+          for ((basename1, child1), (basename2, child2)) in children1.iter().zip(children2.iter()) {
+            if basename1 != basename2 {
+              panic!("children basenames are not equal\nlhs: {:?}\nrhs: {:?}",
+                     child1,
+                     child2);
+            }
+            child1.assert_eq_with_mtime_epsilon(child2, acceptable_time_gap_millis);
+          }
+        }
+
+        (&FsEntryType::Symlink { target: ref target1, ty: ty1 },
+         &FsEntryType::Symlink { target: ref target2, ty: ty2 }) => {
+          if ty1 != ty2 {
+            panic!("symlink types are not equal\nlhs: {:?}\nrhs: {:?}",
+                   self,
+                   other);
+          }
+
+          if target1 != target2 {
+            panic!("symlink targets are not equal\nlhs: {:?}\nrhs: {:?}",
+                   self,
+                   other);
+          }
+        }
+        _ => {
+          panic!("node entry types are not equal\nlhs: {:?}\nrhs: {:?}",
+                 self,
+                 other)
+        }
+      }
+    }
+  }
 
   #[cfg(not(windows))]
   mod symlink_target_paths {
