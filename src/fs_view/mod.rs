@@ -325,12 +325,14 @@ fn make_symlink(src: &Path, dst: &Path, ty: FsItemType) -> Result<()> {
 fn make_symlink(src: &Path, dst: &Path, ty: FsItemType) -> Result<()> {
   use std::os::windows::fs::{symlink_dir, symlink_file};
   match ty {
-    SymlinkType::Directory => {
+    FsItemType::Directory => {
       Ok(symlink_dir(src, dst).chain_err(|| "unable to create directory symlink")?)
     }
-    SymlinkType::File | SymlinkType::SymlinkUgh => {
+    FsItemType::File | FsItemType::SymlinkUgh => {
       Ok(symlink_file(src, dst).chain_err(|| "unable to create file symlink")?)
     }
+    // we don't want to try to write any of this stuff to disk
+    FsItemType::Other => Ok(()),
   }
 }
 
