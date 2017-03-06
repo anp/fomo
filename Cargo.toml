@@ -8,12 +8,10 @@ description = "A file-watcher for JavaScript build tools."
 chrono = { version = "^0.3.0", features = ["serde"] }
 clap = { version = "^2.20.5", features = ["wrap_help"] }
 error-chain = "^0.10.0"
-lazy_static = "^0.2.4"
 serde = "^0.9.6"
 serde_derive = "^0.9.6"
 serde_json = "^0.9.6"
 walkdir = "^1.0.7"
 
 [dev-dependencies]
-quickcheck = "^0.4.1"
 tempdir = "^0.3.5"

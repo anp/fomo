@@ -296,15 +296,13 @@ impl NodeSource for DirEntry {
 
 #[cfg(test)]
 mod test {
-  use chrono::{DateTime, Local};
-  use std;
+  use chrono::Local;
   use std::fs::File;
   use std::io::prelude::*;
   use std::path::PathBuf;
   use tempdir::TempDir;
   use walkdir::WalkDir;
 
-  use errors::*;
   use super::*;
 
   impl FsRootNode {
@@ -435,7 +433,9 @@ mod test {
 
   #[cfg(windows)]
   mod symlink_target_paths {
+    #[allow(dead_code)]
     pub const FILE: &'static str = "C:\\Windows\\explorer.exe";
+    #[allow(dead_code)]
     pub const DIRECTORY: &'static str = "C:\\Windows";
   }
 
@@ -478,68 +478,76 @@ mod test {
     let mut root_node = FsRootNode::new();
 
     root_node.insert_node(FsNode {
-      path: many_child_dir_path,
-      basename: String::from("many_child_dir"),
-      entry: FsEntryType::Directory { children: BTreeMap::new(), },
-      mtime: Local::now(),
-    });
+        path: many_child_dir_path,
+        basename: String::from("many_child_dir"),
+        entry: FsEntryType::Directory { children: BTreeMap::new(), },
+        mtime: Local::now(),
+      })
+      .expect("couldn't insert many_child_dir");
 
     root_node.insert_node(FsNode {
-      path: single_child_dir_path,
-      basename: String::from("single_child_dir"),
-      entry: FsEntryType::Directory { children: BTreeMap::new(), },
-      mtime: Local::now(),
-    });
+        path: single_child_dir_path,
+        basename: String::from("single_child_dir"),
+        entry: FsEntryType::Directory { children: BTreeMap::new(), },
+        mtime: Local::now(),
+      })
+      .expect("couldn't insert single_child_dir");
 
     root_node.insert_node(FsNode {
-      path: empty_dir_path,
-      basename: String::from("empty_dir"),
-      entry: FsEntryType::Directory { children: BTreeMap::new(), },
-      mtime: Local::now(),
-    });
+        path: empty_dir_path,
+        basename: String::from("empty_dir"),
+        entry: FsEntryType::Directory { children: BTreeMap::new(), },
+        mtime: Local::now(),
+      })
+      .expect("couldn't insert empty_dir");
 
     root_node.insert_node(FsNode {
-      path: empty_file_path,
-      basename: String::from("empty_file"),
-      entry: FsEntryType::File { len: 0, },
-      mtime: Local::now(),
-    });
+        path: empty_file_path,
+        basename: String::from("empty_file"),
+        entry: FsEntryType::File { len: 0, },
+        mtime: Local::now(),
+      })
+      .expect("couldn't insert empty_file");
 
     root_node.insert_node(FsNode {
-      path: single_byte_file_path,
-      basename: String::from("single_byte_file"),
-      entry: FsEntryType::File { len: 1, },
-      mtime: Local::now(),
-    });
+        path: single_byte_file_path,
+        basename: String::from("single_byte_file"),
+        entry: FsEntryType::File { len: 1, },
+        mtime: Local::now(),
+      })
+      .expect("couldn't insert single_byte_file");
 
     root_node.insert_node(FsNode {
-      path: twenty_two_byte_file_path,
-      basename: String::from("twenty_two_byte_file"),
-      entry: FsEntryType::File { len: 22, },
-      mtime: Local::now(),
-    });
+        path: twenty_two_byte_file_path,
+        basename: String::from("twenty_two_byte_file"),
+        entry: FsEntryType::File { len: 22, },
+        mtime: Local::now(),
+      })
+      .expect("couldn't insert twenty_two_byte_file");
 
     #[cfg(not(windows))]
     {
       root_node.insert_node(FsNode {
-        path: symlink_to_file_path,
-        basename: String::from("symlink_to_file"),
-        entry: FsEntryType::Symlink {
-          target: PathBuf::from(symlink_target_paths::FILE),
-          ty: FsItemType::File,
-        },
-        mtime: Local::now(),
-      });
+          path: symlink_to_file_path,
+          basename: String::from("symlink_to_file"),
+          entry: FsEntryType::Symlink {
+            target: PathBuf::from(symlink_target_paths::FILE),
+            ty: FsItemType::File,
+          },
+          mtime: Local::now(),
+        })
+        .expect("couldn't insert symlink_to_file");
 
       root_node.insert_node(FsNode {
-        path: symlink_to_dir_path,
-        basename: String::from("symlink_to_dir"),
-        entry: FsEntryType::Symlink {
-          target: PathBuf::from(symlink_target_paths::DIRECTORY),
-          ty: FsItemType::Directory,
-        },
-        mtime: Local::now(),
-      });
+          path: symlink_to_dir_path,
+          basename: String::from("symlink_to_dir"),
+          entry: FsEntryType::Symlink {
+            target: PathBuf::from(symlink_target_paths::DIRECTORY),
+            ty: FsItemType::Directory,
+          },
+          mtime: Local::now(),
+        })
+        .expect("couldn't insert symlink_to_dir");
     }
 
     // write to disk

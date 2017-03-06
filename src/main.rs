@@ -20,17 +20,12 @@ extern crate chrono;
 extern crate clap;
 #[macro_use]
 extern crate error_chain;
-#[macro_use]
-extern crate lazy_static;
 extern crate serde;
 #[macro_use]
 extern crate serde_derive;
 extern crate serde_json;
 extern crate walkdir;
 
-#[cfg(test)]
-#[macro_use]
-extern crate quickcheck;
 #[cfg(test)]
 extern crate tempdir;
 
