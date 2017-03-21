@@ -630,9 +630,8 @@ mod test {
       .map(|n| n.path.clone())
       .collect::<Vec<_>>();
 
-    assert_eq!(iteration_order, found_items);
-
     found_items.sort();
+    assert_eq!(iteration_order, found_items);
     assert_eq!(to_find, found_items);
 
     println!("found files: {:#?}", found_items);
