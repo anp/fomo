@@ -25,6 +25,60 @@ pub struct FsNode {
 #[derive(Debug, Serialize)]
 pub struct FsRootNode(FsNode);
 
+impl<'a> FsRootNode {
+  pub fn iter(&'a self) -> FsIterator<'a> {
+    FsIterator {
+      to_visit: Vec::new(),
+      current: Some(&self.0),
+    }
+  }
+}
+
+impl<'a> IntoIterator for &'a FsRootNode {
+  type Item = &'a FsNode;
+  type IntoIter = FsIterator<'a>;
+
+  fn into_iter(self) -> Self::IntoIter {
+    self.iter()
+  }
+}
+
+pub struct FsIterator<'a> {
+  to_visit: Vec<&'a FsNode>,
+  current: Option<&'a FsNode>,
+}
+
+impl<'a> Iterator for FsIterator<'a> {
+  type Item = &'a FsNode;
+
+  fn next(&mut self) -> Option<Self::Item> {
+    // if the current node is a dir, add all to to_visit
+    match self.current {
+      Some(ref node) => {
+        // add children to the stack to visit next
+        match node.entry {
+          FsEntryType::RootRoot { ref children } |
+          FsEntryType::Directory { ref children } => {
+            self.to_visit.extend(children.values().rev());
+          }
+          FsEntryType::File { .. } |
+          FsEntryType::Symlink { .. } => (),
+        }
+      }
+      None => (),
+    };
+
+    // set current to the next to_visit item
+
+    // return the previous current
+    let returned = self.current;
+
+    self.current = self.to_visit.pop();
+
+    returned
+  }
+}
+
 impl FsRootNode {
   pub fn new() -> Self {
     FsRootNode(FsNode {
@@ -570,6 +624,13 @@ mod test {
       .into_iter()
       .map(|r| r.expect("unable to read from walkdir iterator").path().to_path_buf())
       .collect::<Vec<_>>();
+
+    let iteration_order = root_node.iter()
+      .filter(|n| n.path.starts_with(tmp.path()))
+      .map(|n| n.path.clone())
+      .collect::<Vec<_>>();
+
+    assert_eq!(iteration_order, found_items);
 
     found_items.sort();
     assert_eq!(to_find, found_items);
