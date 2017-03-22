@@ -160,7 +160,7 @@ impl FsNode {
     }
   }
 
-  pub fn try_from_node_source<S: NodeSource>(entry: S) -> Result<Self> {
+  fn try_from_node_source<S: NodeSource>(entry: S) -> Result<Self> {
 
     let basename = match entry.path().file_name() {
       Some(n) => {
@@ -280,21 +280,25 @@ pub enum FsEntryType {
   RootRoot { children: BTreeMap<String, FsNode>, },
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub enum FsItemType {
+  #[serde(rename="file")]
   File,
+  #[serde(rename="dir")]
   Directory,
+  #[serde(rename="symlink")]
   SymlinkUgh,
+  #[serde(rename="other")]
   Other,
 }
 
-pub struct MetadataFromFs {
+struct MetadataFromFs {
   ty: FsItemType,
   mtime: DateTime<Local>,
   len: u64,
 }
 
-pub trait NodeSource {
+trait NodeSource {
   fn path(&self) -> PathBuf;
   fn metadata(&self) -> Result<MetadataFromFs>;
 }

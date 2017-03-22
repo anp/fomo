@@ -11,7 +11,7 @@ use glob::{Pattern, PatternError};
 use regex;
 use regex::Regex;
 
-use fs_view::{FsEntryType, FsNode, FsRootNode};
+use fs_view::{FsEntryType, FsItemType, FsNode, FsRootNode};
 
 lazy_static! {
   static ref GLOBS: Mutex<HashMap<String, Result<Pattern, PatternError>>> = {
@@ -24,35 +24,68 @@ lazy_static! {
 
 /// A single filesystem query. Heavily inspired by watchman's query DSL.
 ///
-/// `suffix`, `glob`, and `path` are what watchman called "generators." They
-/// are used to build a list of candidate files from the current file system.
-///
-/// As the generators accumulate potential file matches, they are passed to
-/// `expression` for evaluation, if it is provided. Because the expression can
+/// As the file system iterator produces potential file matches, they are passed to
+/// `expression` for evaluation. Because the expression can
 /// be nested many layers deep, this can be used for somewhat complex
 /// evaluation of files for inclusion in the query results.
-///
-/// Finally, if the user specifies deduplication, we will flatten any duplicate
-/// file entries before returning the query.
 #[derive(Deserialize)]
 pub struct Query {
   /// A client-provided identifier for this query.
   id: String,
-  #[serde(default)]
   expr: QueryExpression,
-  /// Whether to deduplicate results.
-  #[serde(default)]
-  dedup_results: bool,
 }
 
 #[derive(Serialize)]
 pub struct QueryResult {
   id: String,
+  files: Vec<FileResult>,
+}
+
+#[derive(Serialize)]
+pub struct FileResult {
+  path: PathBuf,
+  name: String,
+  mtime: DateTime<Local>,
+  len: u64,
+  is_dir: bool,
+  link_target: Option<PathBuf>,
+  link_target_ty: Option<FsItemType>,
+}
+
+impl FileResult {
+  fn from(node: &FsNode) -> Self {
+    let (len, is_dir, link_target, link_target_type) = match &node.entry {
+      &FsEntryType::File { len: l } => (l, false, None, None),
+      &FsEntryType::Symlink { ref target, ty } => (0, false, Some(target.clone()), Some(ty)),
+      &FsEntryType::Directory { ref children } |
+      &FsEntryType::RootRoot { ref children } => (children.len() as u64, true, None, None),
+    };
+
+    FileResult {
+      path: node.path.clone(),
+      name: node.basename.clone(),
+      mtime: node.mtime.clone(),
+      len: len,
+      is_dir: is_dir,
+      link_target: link_target,
+      link_target_ty: link_target_type,
+    }
+  }
 }
 
 impl Query {
   pub fn eval(self, fs: &FsRootNode) -> QueryResult {
-    QueryResult { id: self.id, }
+    // we only have one client right now, so the filesystem view should have very low overhead
+    // compared to what watchman does, so i don't think we need generators
+    let files = fs.iter()
+      .filter(|n| self.expr.matches(n))
+      .map(|n| FileResult::from(n))
+      .collect::<Vec<_>>();
+
+    QueryResult {
+      id: self.id,
+      files: files,
+    }
   }
 }
 
@@ -97,7 +130,7 @@ pub enum QueryExpression {
 
   /// Returns true if the file matches the specified file type.
   #[serde(rename="type")]
-  Type(NodeType),
+  Type(FsItemType),
 
   // begin path-oriented query terms
   /// Returns true if the file has a parent directory that matches the path
@@ -143,7 +176,6 @@ pub enum QueryExpression {
   Regex {
     spec: String,
     match_type: FilenameMatchType,
-    case_insensitive: bool,
   },
 
   /// Returns true, always.
@@ -185,10 +217,10 @@ impl QueryExpression {
       }
       &QueryExpression::Type(ty) => {
         match (ty, &node.entry) {
-          (NodeType::Directory, &FsEntryType::Directory { .. }) => true,
-          (NodeType::Directory, &FsEntryType::RootRoot { .. }) => true,
-          (NodeType::FileRegular, &FsEntryType::File { .. }) => true,
-          (NodeType::Symlink, &FsEntryType::Symlink { .. }) => true,
+          (FsItemType::Directory, &FsEntryType::Directory { .. }) => true,
+          (FsItemType::Directory, &FsEntryType::RootRoot { .. }) => true,
+          (FsItemType::File, &FsEntryType::File { .. }) => true,
+          (FsItemType::SymlinkUgh, &FsEntryType::Symlink { .. }) => true,
           _ => false,
         }
       }
@@ -260,7 +292,7 @@ impl QueryExpression {
           &Err(ref why) => panic!("Compiling glob pattern failed: {:?}", why),
         }
       }
-      &QueryExpression::Regex { ref spec, match_type, case_insensitive } => {
+      &QueryExpression::Regex { ref spec, match_type } => {
         let name = node_name_to_match(node, match_type);
 
         let mut regexes = REGEXES.lock().unwrap();
@@ -333,22 +365,4 @@ impl Default for FilenameMatchType {
   fn default() -> Self {
     FilenameMatchType::Basename
   }
-}
-
-#[derive(Clone, Copy, Deserialize, Serialize)]
-pub enum NodeType {
-  #[serde(rename="f")]
-  FileRegular,
-  #[serde(rename="b")]
-  FileBlockSpecial,
-  #[serde(rename="c")]
-  FileCharacterSpecial,
-  #[serde(rename="d")]
-  Directory,
-  #[serde(rename="p")]
-  NamedPipeFifo,
-  #[serde(rename="l")]
-  Symlink,
-  #[serde(rename="s")]
-  Socket,
 }
