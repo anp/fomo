@@ -1,6 +1,8 @@
 use std::default::Default;
 use std::path::PathBuf;
 
+use fs_view::FsRootNode;
+
 /// A single filesystem query. Heavily inspired by watchman's query DSL.
 ///
 /// `suffix`, `glob`, and `path` are what watchman called "generators." They
@@ -13,8 +15,10 @@ use std::path::PathBuf;
 ///
 /// Finally, if the user specifies deduplication, we will flatten any duplicate
 /// file entries before returning the query.
-#[derive(Deserialize, Serialize)]
+#[derive(Deserialize)]
 pub struct Query {
+  /// A client-provided identifier for this query.
+  id: String,
   /// Filter for files with extensions matching one of the provided suffixes.
   #[serde(default)]
   suffix: Vec<String>,
@@ -31,6 +35,21 @@ pub struct Query {
   #[serde(default)]
   dedup_results: bool,
 }
+
+#[derive(Serialize)]
+pub struct QueryResult {
+  id: String,
+}
+
+impl Query {
+  pub fn eval(self, fs: &FsRootNode) -> QueryResult {
+
+
+
+    QueryResult { id: self.id, }
+  }
+}
+
 
 /// A specification of a list of paths to pull files from, with a maximum
 /// depth specified to make sure we don't go down any rabbit holes.
