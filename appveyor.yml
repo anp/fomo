@@ -34,13 +34,11 @@ install:
   - set PATH=%PATH%;C:\Users\appveyor\.cargo\bin
   - rustc -Vv
   - cargo -V
-  - cargo install rustfmt
 
 # This is the "test phase", tweak it as you see fit
 test_script:
   # we don't run the "test phase" when doing deploys
   - if [%APPVEYOR_REPO_TAG%]==[false] (
-      cargo fmt -- --write-mode diff &&
       cargo build --target %TARGET% &&
       cargo build --target %TARGET% --release &&
       cargo test --target %TARGET% &&
