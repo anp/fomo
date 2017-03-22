@@ -14,8 +14,12 @@ use regex::Regex;
 use fs_view::{FsEntryType, FsNode, FsRootNode};
 
 lazy_static! {
-  static ref GLOBS: Mutex<HashMap<String, Result<Pattern, PatternError>>> = Mutex::new(HashMap::new());
-  static ref REGEXES: Mutex<HashMap<String, Result<Regex, regex::Error>>> = Mutex::new(HashMap::new());
+  static ref GLOBS: Mutex<HashMap<String, Result<Pattern, PatternError>>> = {
+    Mutex::new(HashMap::new())
+  };
+  static ref REGEXES: Mutex<HashMap<String, Result<Regex, regex::Error>>> = {
+    Mutex::new(HashMap::new())
+  };
 }
 
 /// A single filesystem query. Heavily inspired by watchman's query DSL.
