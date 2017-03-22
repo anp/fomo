@@ -1,7 +1,22 @@
+use std::ascii::AsciiExt;
+use std::borrow::Cow;
+use std::collections::HashMap;
 use std::default::Default;
 use std::path::PathBuf;
+use std::sync::Mutex;
+use std::usize;
 
-use fs_view::FsRootNode;
+use chrono::{DateTime, Local};
+use glob::{Pattern, PatternError};
+use regex;
+use regex::Regex;
+
+use fs_view::{FsEntryType, FsNode, FsRootNode};
+
+lazy_static! {
+  static ref GLOBS: Mutex<HashMap<String, Result<Pattern, PatternError>>> = Mutex::new(HashMap::new());
+  static ref REGEXES: Mutex<HashMap<String, Result<Regex, regex::Error>>> = Mutex::new(HashMap::new());
+}
 
 /// A single filesystem query. Heavily inspired by watchman's query DSL.
 ///
@@ -19,18 +34,8 @@ use fs_view::FsRootNode;
 pub struct Query {
   /// A client-provided identifier for this query.
   id: String,
-  /// Filter for files with extensions matching one of the provided suffixes.
   #[serde(default)]
-  suffix: Vec<String>,
-  /// A list of file globs to match against.
-  #[serde(default)]
-  glob: Vec<String>,
-  /// A list of paths to search, with a depth limit specified.
-  #[serde(default)]
-  path: Vec<PathQuerySpec>,
-  /// A query expression to evaluate against file nodes.
-  #[serde(default)]
-  expression: QueryExpression,
+  expr: QueryExpression,
   /// Whether to deduplicate results.
   #[serde(default)]
   dedup_results: bool,
@@ -43,27 +48,10 @@ pub struct QueryResult {
 
 impl Query {
   pub fn eval(self, fs: &FsRootNode) -> QueryResult {
-
-
-
     QueryResult { id: self.id, }
   }
 }
 
-
-/// A specification of a list of paths to pull files from, with a maximum
-/// depth specified to make sure we don't go down any rabbit holes.
-#[derive(Deserialize, Serialize)]
-pub struct PathQuerySpec {
-  /// The path to start searching within.
-  #[serde(rename="path")]
-  path: String,
-  /// The maximum depth to search.
-  #[serde(rename="depth", default)]
-  depth_limit: TraversalDepth,
-}
-
-/// Once the
 #[derive(Deserialize, Serialize)]
 pub enum QueryExpression {
   // begin logical query terms
@@ -90,11 +78,7 @@ pub enum QueryExpression {
   /// The optional `field` can be used to specify whether to compare to only a
   /// single metadata field.
   #[serde(rename="since")]
-  Since {
-    time: u64,
-    #[serde(default)]
-    field: StatFieldQuery,
-  },
+  Since { time: DateTime<Local>, },
 
   /// Returns the result of performing the comparison with the current file
   /// size as the left-hand
@@ -121,7 +105,7 @@ pub enum QueryExpression {
   #[serde(rename="parent")]
   HasParentDirectory {
     case_insensitive: bool,
-    name: PathBuf,
+    name: String,
     depth: Option<DepthSpec>,
   },
 
@@ -143,7 +127,6 @@ pub enum QueryExpression {
     spec: String,
     match_type: FilenameMatchType,
     case_insensitive: bool,
-    include_hidden_files: bool,
   },
 
   /// Returns true if the file name (default) or path matches the provided
@@ -164,19 +147,151 @@ pub enum QueryExpression {
   NoOp,
 }
 
+impl QueryExpression {
+  fn matches(&self, node: &FsNode) -> bool {
+    match self {
+      &QueryExpression::AllOf(ref subexprs) => subexprs.iter().all(|subexpr| subexpr.matches(node)),
+      &QueryExpression::AnyOf(ref subexprs) => subexprs.iter().any(|subexpr| subexpr.matches(node)),
+      &QueryExpression::Not(ref subexpr) => !subexpr.matches(node),
+      &QueryExpression::Empty => {
+        match node.entry {
+          FsEntryType::Directory { ref children } |
+          FsEntryType::RootRoot { ref children } => children.len() == 0,
+          FsEntryType::File { len } => len == 0,
+          FsEntryType::Symlink { .. } => false,
+        }
+      }
+      &QueryExpression::Since { time } => node.mtime >= time,
+      &QueryExpression::Size { cmp, bytes } => {
+        match node.entry {
+          FsEntryType::File { len } => cmp.eval(len, bytes),
+          _ => false,
+        }
+      }
+      &QueryExpression::SuffixCaseInsensitive(ref suffix) => {
+        let mut halves = node.basename.rsplit('.');
+        let found_suffix = halves.next();
+        let rest = halves.next();
+
+        if let (Some(_), Some(real_found_suffix)) = (rest, found_suffix) {
+          real_found_suffix == suffix
+        } else {
+          false
+        }
+      }
+      &QueryExpression::Type(ty) => {
+        match (ty, &node.entry) {
+          (NodeType::Directory, &FsEntryType::Directory { .. }) => true,
+          (NodeType::Directory, &FsEntryType::RootRoot { .. }) => true,
+          (NodeType::FileRegular, &FsEntryType::File { .. }) => true,
+          (NodeType::Symlink, &FsEntryType::Symlink { .. }) => true,
+          _ => false,
+        }
+      }
+      &QueryExpression::HasParentDirectory { case_insensitive, ref name, depth } => {
+        // we reverse the path components, so this is essentially walking "up"
+        // the tree. we have to skip at least one component from the path,
+        // since the first component in a reverse traversal is the basename
+        // since we want to supply bounds in the traversal depth, we'll
+        //
+        // 1. skip the appropriate number of components (1 if there's an upper bound, more if
+        //    there's a lower bound supplied)
+        // 2. limit the number of path components we'll examine (N if there's an upper bound, and
+        //    effectively infinite if there's no upper bound)
+        let (skip_amt, take_amt): (usize, usize) = if let Some(depth) = depth {
+          let steps = depth.steps as usize;
+          match depth.cmp {
+            Comparator::Less => (1, steps - 1),
+            Comparator::LessEqual => (1, steps),
+            Comparator::Equal => (steps - 1, 1),
+            Comparator::Greater => (steps, usize::MAX),
+            Comparator::GreaterEqual => (steps - 1, usize::MAX),
+          }
+        } else {
+          (1, usize::MAX)
+        };
+
+        node.path
+          .components()
+          .rev()
+          .skip(skip_amt)
+          .take(take_amt)
+          .map(|c| c.as_os_str().to_string_lossy())
+          .any(|p| if case_insensitive {
+            p.eq_ignore_ascii_case(&name)
+          } else {
+            &*p == name
+          })
+      }
+      &QueryExpression::NameMatch { ref spec, match_type, case_insensitive } => {
+        spec.iter().any(|s| {
+          let to_match = node_name_to_match(node, match_type);
+          if case_insensitive {
+            s.eq_ignore_ascii_case(&*to_match)
+          } else {
+            s == &*to_match
+          }
+        })
+      }
+      &QueryExpression::GlobMatch { ref spec, match_type, case_insensitive } => {
+        let spec = if case_insensitive {
+          Cow::Owned(spec.to_lowercase())
+        } else {
+          Cow::Borrowed(spec)
+        };
+
+        let name = node_name_to_match(node, match_type);
+        let name = if case_insensitive {
+          Cow::Owned(name.to_lowercase())
+        } else {
+          name
+        };
+
+        let second_spec = spec.clone();
+        let mut globs = GLOBS.lock().unwrap();
+        let globber = globs.entry(spec.into_owned()).or_insert_with(|| Pattern::new(&*second_spec));
+
+        match &*globber {
+          &Ok(ref globber) => globber.matches(&name),
+          &Err(ref why) => panic!("Compiling glob pattern failed: {:?}", why),
+        }
+      }
+      &QueryExpression::Regex { ref spec, match_type, case_insensitive } => {
+        let name = node_name_to_match(node, match_type);
+
+        let mut regexes = REGEXES.lock().unwrap();
+        let regex = regexes.entry(spec.clone()).or_insert_with(|| Regex::new(&spec));
+
+        match &*regex {
+          &Ok(ref r) => r.is_match(&name),
+          &Err(ref why) => panic!("Compiling regex pattern failed: {:?}", why),
+        }
+      }
+      &QueryExpression::NoOp => true,
+    }
+  }
+}
+
 impl Default for QueryExpression {
   fn default() -> Self {
     QueryExpression::NoOp
   }
 }
 
-#[derive(Deserialize, Serialize)]
+fn node_name_to_match(node: &FsNode, match_ty: FilenameMatchType) -> Cow<str> {
+  match match_ty {
+    FilenameMatchType::Basename => Cow::from(&*node.basename),
+    FilenameMatchType::Wholename => node.path.to_string_lossy(),
+  }
+}
+
+#[derive(Clone, Copy, Deserialize, Serialize)]
 pub struct DepthSpec {
   steps: u32,
   cmp: Comparator,
 }
 
-#[derive(Deserialize, Serialize)]
+#[derive(Clone, Copy, Deserialize, Serialize)]
 pub enum Comparator {
   #[serde(rename="lt")]
   Less,
@@ -190,7 +305,19 @@ pub enum Comparator {
   Greater,
 }
 
-#[derive(Deserialize, Serialize)]
+impl Comparator {
+  pub fn eval(self, lhs: u64, rhs: u64) -> bool {
+    match self {
+      Comparator::Less => lhs < rhs,
+      Comparator::LessEqual => lhs <= rhs,
+      Comparator::Equal => lhs == rhs,
+      Comparator::Greater => lhs > rhs,
+      Comparator::GreaterEqual => lhs >= rhs,
+    }
+  }
+}
+
+#[derive(Clone, Copy, Deserialize, Serialize)]
 pub enum FilenameMatchType {
   #[serde(rename="basename")]
   Basename,
@@ -204,23 +331,7 @@ impl Default for FilenameMatchType {
   }
 }
 
-#[derive(Deserialize, Serialize)]
-pub enum StatFieldQuery {
-  #[serde(rename="mtime")]
-  ModificationTime,
-  #[serde(rename="ctime")]
-  CreationTime,
-  #[serde(rename="any-change")]
-  Both,
-}
-
-impl Default for StatFieldQuery {
-  fn default() -> Self {
-    StatFieldQuery::Both
-  }
-}
-
-#[derive(Deserialize, Serialize)]
+#[derive(Clone, Copy, Deserialize, Serialize)]
 pub enum NodeType {
   #[serde(rename="f")]
   FileRegular,
@@ -236,19 +347,4 @@ pub enum NodeType {
   Symlink,
   #[serde(rename="s")]
   Socket,
-}
-
-#[derive(Deserialize, Serialize)]
-#[serde(untagged)]
-pub enum TraversalDepth {
-  #[serde(rename="inf")]
-  Infinite,
-  #[serde(rename="d")]
-  Finite(u32),
-}
-
-impl Default for TraversalDepth {
-  fn default() -> Self {
-    TraversalDepth::Infinite
-  }
 }

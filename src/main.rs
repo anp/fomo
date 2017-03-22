@@ -20,6 +20,10 @@ extern crate chrono;
 extern crate clap;
 #[macro_use]
 extern crate error_chain;
+extern crate glob;
+#[macro_use]
+extern crate lazy_static;
+extern crate regex;
 extern crate serde;
 #[macro_use]
 extern crate serde_derive;
@@ -36,11 +40,16 @@ use std::path::Path;
 
 mod errors {
   // Create the Error, ErrorKind, ResultExt, and Result types
-  error_chain!{}
+  use glob::PatternError;
+  error_chain!{
+    foreign_links {
+      GlobError(PatternError);
+    }
+  }
 }
 
-mod fs_view;
-mod query;
+pub mod fs_view;
+pub mod query;
 mod times;
 
 use errors::*;

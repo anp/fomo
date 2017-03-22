@@ -16,10 +16,10 @@ use std::fs::{OpenOptions, create_dir_all};
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct FsNode {
-  path: PathBuf,
-  basename: String,
-  entry: FsEntryType,
-  mtime: DateTime<Local>,
+  pub path: PathBuf,
+  pub basename: String,
+  pub entry: FsEntryType,
+  pub mtime: DateTime<Local>,
 }
 
 #[derive(Debug, Serialize)]
