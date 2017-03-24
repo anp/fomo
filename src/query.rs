@@ -185,8 +185,11 @@ impl QueryExpression {
   fn matches(&self, node: &FsNode) -> bool {
     match self {
       &QueryExpression::AllOf(ref subexprs) => subexprs.iter().all(|subexpr| subexpr.matches(node)),
+
       &QueryExpression::AnyOf(ref subexprs) => subexprs.iter().any(|subexpr| subexpr.matches(node)),
+
       &QueryExpression::Not(ref subexpr) => !subexpr.matches(node),
+
       &QueryExpression::Empty => {
         match node.entry {
           FsEntryType::Directory { ref children } |
@@ -195,13 +198,16 @@ impl QueryExpression {
           FsEntryType::Symlink { .. } => false,
         }
       }
+
       &QueryExpression::Since { time } => node.mtime >= time,
+
       &QueryExpression::Size { cmp, bytes } => {
         match node.entry {
           FsEntryType::File { len } => cmp.eval(len, bytes),
           _ => false,
         }
       }
+
       &QueryExpression::SuffixCaseInsensitive(ref suffix) => {
         let mut halves = node.basename.rsplit('.');
         let found_suffix = halves.next();
@@ -213,6 +219,7 @@ impl QueryExpression {
           false
         }
       }
+
       &QueryExpression::Type(ty) => {
         match (ty, &node.entry) {
           (FsItemType::Directory, &FsEntryType::Directory { .. }) => true,
@@ -222,6 +229,7 @@ impl QueryExpression {
           _ => false,
         }
       }
+
       &QueryExpression::HasParentDirectory { case_insensitive, ref name, depth } => {
         // we reverse the path components, so this is essentially walking "up"
         // the tree. we have to skip at least one component from the path,
@@ -257,6 +265,7 @@ impl QueryExpression {
             &*p == name
           })
       }
+
       &QueryExpression::NameMatch { ref spec, match_type, case_insensitive } => {
         spec.iter().any(|s| {
           let to_match = node_name_to_match(node, match_type);
@@ -267,6 +276,7 @@ impl QueryExpression {
           }
         })
       }
+
       &QueryExpression::GlobMatch { ref spec, match_type, case_insensitive } => {
         let spec = if case_insensitive {
           Cow::Owned(Globber(Pattern::new(&spec.as_str().to_lowercase())
@@ -285,6 +295,7 @@ impl QueryExpression {
 
         spec.matches(&name)
       }
+
       &QueryExpression::Regex { ref spec, match_type } => {
         let name = node_name_to_match(node, match_type);
 
@@ -296,6 +307,7 @@ impl QueryExpression {
           &Err(ref why) => panic!("Compiling regex pattern failed: {:?}", why),
         }
       }
+
       &QueryExpression::NoOp => true,
     }
   }
