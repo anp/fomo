@@ -21,8 +21,6 @@ extern crate clap;
 #[macro_use]
 extern crate error_chain;
 extern crate glob;
-#[macro_use]
-extern crate lazy_static;
 extern crate regex;
 extern crate serde;
 #[macro_use]
@@ -51,6 +49,7 @@ mod errors {
 pub mod fs_view;
 mod glob_wrapper;
 pub mod query;
+mod regex_wrapper;
 mod times;
 
 use errors::*;

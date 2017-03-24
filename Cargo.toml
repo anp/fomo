@@ -9,7 +9,6 @@ chrono = { version = "^0.3.0", features = ["serde"] }
 clap = { version = "^2.20.5", features = ["wrap_help"] }
 error-chain = "^0.10.0"
 glob = "^0.2.11"
-lazy_static = "^0.2.4"
 regex = "^0.2.1"
 serde = "^0.9.6"
 serde_derive = "^0.9.6"

@@ -1,24 +1,15 @@
 use std::ascii::AsciiExt;
 use std::borrow::Cow;
-use std::collections::HashMap;
 use std::default::Default;
 use std::path::PathBuf;
-use std::sync::Mutex;
 use std::usize;
 
 use chrono::{DateTime, Local};
 use glob::Pattern;
-use regex;
-use regex::Regex;
 
 use fs_view::{FsEntryType, FsItemType, FsNode, FsRootNode};
 use glob_wrapper::Globber;
-
-lazy_static! {
-  static ref REGEXES: Mutex<HashMap<String, Result<Regex, regex::Error>>> = {
-    Mutex::new(HashMap::new())
-  };
-}
+use regex_wrapper::RegexMatcher;
 
 /// A single filesystem query. Heavily inspired by watchman's query DSL.
 ///
@@ -172,7 +163,7 @@ pub enum QueryExpression {
   /// https://doc.rust-lang.org/regex/regex/index.html#syntax
   #[serde(rename="regex")]
   Regex {
-    spec: String,
+    spec: RegexMatcher,
     match_type: FilenameMatchType,
   },
 
@@ -299,13 +290,7 @@ impl QueryExpression {
       &QueryExpression::Regex { ref spec, match_type } => {
         let name = node_name_to_match(node, match_type);
 
-        let mut regexes = REGEXES.lock().unwrap();
-        let regex = regexes.entry(spec.clone()).or_insert_with(|| Regex::new(&spec));
-
-        match &*regex {
-          &Ok(ref r) => r.is_match(&name),
-          &Err(ref why) => panic!("Compiling regex pattern failed: {:?}", why),
-        }
+        spec.is_match(&name)
       }
 
       &QueryExpression::NoOp => true,
