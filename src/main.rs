@@ -49,6 +49,7 @@ mod errors {
 }
 
 pub mod fs_view;
+mod glob_wrapper;
 pub mod query;
 mod times;
 

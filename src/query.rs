@@ -7,16 +7,14 @@ use std::sync::Mutex;
 use std::usize;
 
 use chrono::{DateTime, Local};
-use glob::{Pattern, PatternError};
+use glob::Pattern;
 use regex;
 use regex::Regex;
 
 use fs_view::{FsEntryType, FsItemType, FsNode, FsRootNode};
+use glob_wrapper::Globber;
 
 lazy_static! {
-  static ref GLOBS: Mutex<HashMap<String, Result<Pattern, PatternError>>> = {
-    Mutex::new(HashMap::new())
-  };
   static ref REGEXES: Mutex<HashMap<String, Result<Regex, regex::Error>>> = {
     Mutex::new(HashMap::new())
   };
@@ -161,7 +159,7 @@ pub enum QueryExpression {
   /// pattern.
   #[serde(rename="glob")]
   GlobMatch {
-    spec: String,
+    spec: Globber,
     match_type: FilenameMatchType,
     case_insensitive: bool,
   },
@@ -271,7 +269,9 @@ impl QueryExpression {
       }
       &QueryExpression::GlobMatch { ref spec, match_type, case_insensitive } => {
         let spec = if case_insensitive {
-          Cow::Owned(spec.to_lowercase())
+          Cow::Owned(Globber(Pattern::new(&spec.as_str().to_lowercase())
+            .expect("Unable to compile lowercased glob, even though the case-sensitive version \
+                     compiled.")))
         } else {
           Cow::Borrowed(spec)
         };
@@ -283,14 +283,7 @@ impl QueryExpression {
           name
         };
 
-        let second_spec = spec.clone();
-        let mut globs = GLOBS.lock().unwrap();
-        let globber = globs.entry(spec.into_owned()).or_insert_with(|| Pattern::new(&*second_spec));
-
-        match &*globber {
-          &Ok(ref globber) => globber.matches(&name),
-          &Err(ref why) => panic!("Compiling glob pattern failed: {:?}", why),
-        }
+        spec.matches(&name)
       }
       &QueryExpression::Regex { ref spec, match_type } => {
         let name = node_name_to_match(node, match_type);
