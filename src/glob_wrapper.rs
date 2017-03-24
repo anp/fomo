@@ -33,9 +33,7 @@ impl Deserialize for Globber {
       fn visit_str<E>(self, value: &str) -> Result<Globber, E>
         where E: ::serde::de::Error
       {
-        Pattern::from_str(value)
-          .map(|p| Globber(p))
-          .map_err(|_| E::invalid_value(Unexpected::Str(value), &self))
+        Globber::from_str(value).map_err(|_| E::invalid_value(Unexpected::Str(value), &self))
       }
 
       fn expecting(&self, formatter: &mut ::std::fmt::Formatter) -> ::std::fmt::Result {
