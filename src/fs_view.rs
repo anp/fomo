@@ -9,6 +9,7 @@ use walkdir;
 use walkdir::WalkDir;
 
 use errors::*;
+use query::QueryExpression;
 use times::system_time_to_date_time;
 
 #[cfg(test)]
@@ -23,13 +24,16 @@ pub struct FsNode {
 }
 
 #[derive(Debug, Serialize)]
-pub struct FsRootNode(FsNode);
+pub struct FsRootNode {
+  base: FsNode,
+  roots: BTreeMap<PathBuf, QueryExpression>,
+}
 
 impl<'a> FsRootNode {
   pub fn iter(&'a self) -> FsIterator<'a> {
     FsIterator {
       to_visit: Vec::new(),
-      current: Some(&self.0),
+      current: Some(&self.base),
     }
   }
 }
@@ -81,12 +85,15 @@ impl<'a> Iterator for FsIterator<'a> {
 
 impl FsRootNode {
   pub fn new() -> Self {
-    FsRootNode(FsNode {
-      path: PathBuf::from(""),
-      basename: String::new(),
-      entry: FsEntryType::RootRoot { children: BTreeMap::new(), },
-      mtime: Local::now(),
-    })
+    FsRootNode {
+      base: FsNode {
+        path: PathBuf::from(""),
+        basename: String::new(),
+        entry: FsEntryType::RootRoot { children: BTreeMap::new(), },
+        mtime: Local::now(),
+      },
+      roots: BTreeMap::new(),
+    }
   }
 
   pub fn add_root(&mut self, path: &Path) -> Result<()> {
@@ -99,7 +106,7 @@ impl FsRootNode {
         components.next_back();
         let path_buffer = PathBuf::new();
 
-        self.0.ensure_and_return_parent(path_buffer, components)?
+        self.base.ensure_and_return_parent(path_buffer, components)?
       };
 
       {
@@ -369,7 +376,7 @@ mod test {
       let path = node.path.clone();
       let mut components = path.components();
       components.next_back();
-      match self.0
+      match self.base
         .ensure_and_return_parent(PathBuf::new(), components)
         .chain_err(|| "unable to ensure parent for new node insertion")?
         .entry {
@@ -609,7 +616,7 @@ mod test {
     }
 
     // write to disk
-    let res = root_node.0.mirror_to_disk();
+    let res = root_node.base.mirror_to_disk();
     match res {
       Ok(_) => (),
       Err(why) => {
@@ -645,10 +652,10 @@ mod test {
     second_root_node.add_root(tmp.path()).expect("unable to construct pair fs view");
 
     println!("root: {}\n\nsecond_root: {}",
-             root_node.0,
-             second_root_node.0);
+             root_node.base,
+             second_root_node.base);
 
-    root_node.0.assert_eq_with_mtime_epsilon(&second_root_node.0, acceptable_epsilon)
+    root_node.base.assert_eq_with_mtime_epsilon(&second_root_node.base, acceptable_epsilon)
   }
 
   #[test]

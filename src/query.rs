@@ -17,10 +17,11 @@ use regex_wrapper::RegexMatcher;
 /// `expression` for evaluation. Because the expression can
 /// be nested many layers deep, this can be used for somewhat complex
 /// evaluation of files for inclusion in the query results.
-#[derive(Deserialize)]
+#[derive(Debug, Deserialize)]
 pub struct Query {
   /// A client-provided identifier for this query.
   id: String,
+  root: PathBuf,
   expr: QueryExpression,
 }
 
@@ -63,7 +64,7 @@ impl FileResult {
 }
 
 impl Query {
-  pub fn eval(self, fs: &FsRootNode) -> QueryResult {
+  pub fn eval(self, fs: &mut FsRootNode) -> QueryResult {
     // we only have one client right now, so the filesystem view should have very low overhead
     // compared to what watchman does, so i don't think we need generators
     let files = fs.iter()
@@ -78,7 +79,7 @@ impl Query {
   }
 }
 
-#[derive(Deserialize, Serialize)]
+#[derive(Debug, Deserialize, Serialize)]
 pub enum QueryExpression {
   // begin logical query terms
   /// Returns true if all subexpressions are true.
@@ -311,13 +312,13 @@ fn node_name_to_match(node: &FsNode, match_ty: FilenameMatchType) -> Cow<str> {
   }
 }
 
-#[derive(Clone, Copy, Deserialize, Serialize)]
+#[derive(Clone, Copy, Debug, Deserialize, Serialize)]
 pub struct DepthSpec {
   steps: u32,
   cmp: Comparator,
 }
 
-#[derive(Clone, Copy, Deserialize, Serialize)]
+#[derive(Clone, Copy, Debug, Deserialize, Serialize)]
 pub enum Comparator {
   #[serde(rename="lt")]
   Less,
@@ -343,7 +344,7 @@ impl Comparator {
   }
 }
 
-#[derive(Clone, Copy, Deserialize, Serialize)]
+#[derive(Clone, Copy, Debug, Deserialize, Serialize)]
 pub enum FilenameMatchType {
   #[serde(rename="basename")]
   Basename,

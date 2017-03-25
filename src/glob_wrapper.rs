@@ -6,7 +6,7 @@ use glob::Pattern;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use serde::de::{Unexpected, Visitor};
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct Globber(pub Pattern);
 
 impl Serialize for Globber {

@@ -6,7 +6,7 @@ use regex::Regex;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use serde::de::{Unexpected, Visitor};
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct RegexMatcher(pub Regex);
 
 impl Serialize for RegexMatcher {
