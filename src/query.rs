@@ -7,7 +7,7 @@ use std::usize;
 use chrono::{DateTime, Local};
 use glob::Pattern;
 
-use fs_view::{FsEntryType, FsItemType, FsNode, FsRootNode};
+use fs_view::{FsEntryType, FsItemType, FsNode};
 use glob_wrapper::Globber;
 use regex_wrapper::RegexMatcher;
 
@@ -20,10 +20,10 @@ use regex_wrapper::RegexMatcher;
 #[derive(Debug, Deserialize)]
 pub struct Query {
   /// A client-provided identifier for this query.
-  id: String,
-  root: PathBuf,
+  pub id: String,
+  pub root: PathBuf,
   #[serde(default)]
-  expr: QueryExpression,
+  pub expr: QueryExpression,
 }
 
 /// A fallback struct to deserialize into if we can't construct a Query.
@@ -34,8 +34,8 @@ pub struct PartialQuery {
 
 #[derive(Serialize)]
 pub struct QueryResult {
-  id: String,
-  files: Vec<FileResult>,
+  pub id: String,
+  pub files: Vec<FileResult>,
 }
 
 #[derive(Serialize)]
@@ -45,12 +45,14 @@ pub struct FileResult {
   mtime: DateTime<Local>,
   len: u64,
   is_dir: bool,
+  #[serde(skip_serializing_if="Option::is_none")]
   link_target: Option<PathBuf>,
+  #[serde(skip_serializing_if="Option::is_none")]
   link_target_ty: Option<FsItemType>,
 }
 
 impl FileResult {
-  fn from(node: &FsNode) -> Self {
+  pub fn make(node: &FsNode) -> Self {
     let (len, is_dir, link_target, link_target_type) = match &node.entry {
       &FsEntryType::File { len: l } => (l, false, None, None),
       &FsEntryType::Symlink { ref target, ty } => (0, false, Some(target.clone()), Some(ty)),
@@ -66,22 +68,6 @@ impl FileResult {
       is_dir: is_dir,
       link_target: link_target,
       link_target_ty: link_target_type,
-    }
-  }
-}
-
-impl Query {
-  pub fn eval(self, fs: &mut FsRootNode) -> QueryResult {
-    // we only have one client right now, so the filesystem view should have very low overhead
-    // compared to what watchman does, so i don't think we need generators
-    let files = fs.iter()
-      .filter(|n| self.expr.matches(n))
-      .map(|n| FileResult::from(n))
-      .collect::<Vec<_>>();
-
-    QueryResult {
-      id: self.id,
-      files: files,
     }
   }
 }
@@ -181,7 +167,7 @@ pub enum QueryExpression {
 }
 
 impl QueryExpression {
-  fn matches(&self, node: &FsNode) -> bool {
+  pub fn matches(&self, node: &FsNode) -> bool {
     match self {
       &QueryExpression::AllOf(ref subexprs) => subexprs.iter().all(|subexpr| subexpr.matches(node)),
 

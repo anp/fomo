@@ -9,7 +9,7 @@ use walkdir;
 use walkdir::WalkDir;
 
 use errors::*;
-use query::QueryExpression;
+use query::{FileResult, Query, QueryExpression, QueryResult};
 use times::system_time_to_date_time;
 
 #[cfg(test)]
@@ -96,6 +96,25 @@ impl FsRootNode {
     }
   }
 
+  pub fn eval(&mut self, query: Query) -> Result<QueryResult> {
+    // make sure all the files we care about are in the tree
+    self.add_root(&query.root)?;
+
+    // we only have one client right now, so the filesystem view should have very low overhead
+    // compared to what watchman does, so i don't think we need generators
+    let files = self.iter()
+      .filter(|n| query.expr.matches(n))
+      .map(|n| FileResult::make(n))
+      .collect::<Vec<_>>();
+
+    self.roots.insert(query.root, query.expr);
+
+    Ok(QueryResult {
+      id: query.id,
+      files: files,
+    })
+  }
+
   pub fn add_root(&mut self, path: &Path) -> Result<()> {
 
     for entry in WalkDir::new(path) {
@@ -117,7 +136,7 @@ impl FsRootNode {
           FsEntryType::Directory { ref mut children } => {
             children.insert(basename, new_node);
           }
-          _ => panic!("Found a non-directory as the parent of a node."),
+          _ => bail!("Found a non-directory as the parent of a node."),
         }
       }
     }
