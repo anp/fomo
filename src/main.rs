@@ -79,12 +79,19 @@ See https://docs.rs/env_logger/ for details.")
   // acquire exclusive use of stdin/stdout
   info!("Initializing stdin/stdout handles");
   let stdin = ::std::io::stdin();
+  let stdin = stdin.lock();
+  let stdout = ::std::io::stdout();
+  let stdout = stdout.lock();
 
-  let stdout_lock = ::std::io::stdout();
-  let mut stdout = stdout_lock.lock();
+  run_for_realsies(stdin, stdout)
+}
 
+fn run_for_realsies<R, W>(stdin: R, mut stdout: W) -> Result<()>
+  where R: Read + BufRead,
+        W: Write
+{
   info!("listening to stdin for queries");
-  for input in stdin.lock().lines() {
+  for input in stdin.lines() {
     let input = input.chain_err(|| "reading from stdin")?;
     let query: query::Query = match serde_json::from_str(&input) {
       Ok(q) => q,
@@ -116,7 +123,6 @@ See https://docs.rs/env_logger/ for details.")
       }
     };
   }
-
   Ok(())
 }
 
