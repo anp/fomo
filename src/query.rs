@@ -22,7 +22,14 @@ pub struct Query {
   /// A client-provided identifier for this query.
   id: String,
   root: PathBuf,
+  #[serde(default)]
   expr: QueryExpression,
+}
+
+/// A fallback struct to deserialize into if we can't construct a Query.
+#[derive(Debug, Deserialize)]
+pub struct PartialQuery {
+  pub id: String,
 }
 
 #[derive(Serialize)]

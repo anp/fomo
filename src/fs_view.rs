@@ -409,7 +409,6 @@ mod test {
           }
         }
         FsEntryType::File { len } => {
-          println!("attempting to create file {:?}", &self.path);
           let file = OpenOptions::new().read(true)
             .write(true)
             .create(true)
@@ -620,7 +619,6 @@ mod test {
     match res {
       Ok(_) => (),
       Err(why) => {
-        println!("{:#?}", root_node);
         panic!("unable to write tree to disk: {:?}", why);
       }
     }
@@ -645,15 +643,9 @@ mod test {
     assert_eq!(iteration_order, found_items);
     assert_eq!(to_find, found_items);
 
-    println!("found files: {:#?}", found_items);
-
     // construct a fsrootnode, see if we round-tripped correctly
     let mut second_root_node = FsRootNode::new();
     second_root_node.add_root(tmp.path()).expect("unable to construct pair fs view");
-
-    println!("root: {}\n\nsecond_root: {}",
-             root_node.base,
-             second_root_node.base);
 
     root_node.base.assert_eq_with_mtime_epsilon(&second_root_node.base, acceptable_epsilon)
   }
