@@ -692,7 +692,7 @@ mod test {
     let mut traversed = 0;
     for entry in WalkDir::new(&tmp_path) {
       let entry = entry.expect("walking directory");
-      let node = FsNode::try_from_node_source(&entry).expect("creating node");
+      let node = FsNode::try_from_node_source(entry).expect("creating node");
       assert_eq!(node.basename, "test-file");
       assert_eq!(node.path, tmp_path);
       assert_eq!(node.entry, FsEntryType::File { len: 0, });
@@ -705,7 +705,7 @@ mod test {
     traversed = 0;
     for entry in WalkDir::new(&tmp_path) {
       let entry = entry.expect("walking directory");
-      let node = FsNode::try_from_node_source(&entry).expect("creating node");
+      let node = FsNode::try_from_node_source(entry).expect("creating node");
       assert_eq!(node.basename, "test-file");
       assert_eq!(node.path, tmp_path);
       assert_eq!(node.entry, FsEntryType::File { len: 7, });
