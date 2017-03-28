@@ -4,7 +4,7 @@ use std::fmt::Display;
 use std::fs::{DirEntry, read_link};
 use std::path::{Components, Path, PathBuf};
 
-use chrono::{DateTime, Local};
+use chrono::{DateTime, Local, UTC};
 use walkdir;
 use walkdir::WalkDir;
 
@@ -98,7 +98,17 @@ impl FsRootNode {
 
   pub fn eval(&mut self, query: Query) -> Result<QueryResult> {
     // make sure all the files we care about are in the tree
-    self.add_root(&query.root)?;
+
+    if !self.roots.contains_key(&query.root) {
+      let start = UTC::now();
+      info!("Adding {:?} root to file system view...", &query.root);
+      self.add_root(&query.root)?;
+
+      let duration = UTC::now().signed_duration_since(start);
+      info!("Added {:?} to file system view, took {} seconds.",
+            &query.root,
+            duration);
+    }
 
     // we only have one client right now, so the filesystem view should have very low overhead
     // compared to what watchman does, so i don't think we need generators
@@ -206,16 +216,20 @@ impl FsNode {
       FsItemType::File => FsEntryType::File { len: metadata.len, },
       FsItemType::SymlinkUgh => {
         let sym_path = read_link(entry.path()).chain_err(|| "unable to read through symlink")?;
-        let sym_meta = sym_path.metadata()
-          .chain_err(|| format!("unable to read symlink target's ({:?}) metadata", sym_path))?;
-        let sym_target_type = if sym_meta.file_type().is_file() {
-          FsItemType::File
-        } else if sym_meta.file_type().is_dir() {
-          FsItemType::Directory
-        } else if sym_meta.file_type().is_symlink() {
-          FsItemType::SymlinkUgh
-        } else {
-          FsItemType::Other
+
+        let sym_target_type = match sym_path.metadata() {
+          Ok(sym_meta) => {
+            if sym_meta.file_type().is_file() {
+              FsItemType::File
+            } else if sym_meta.file_type().is_dir() {
+              FsItemType::Directory
+            } else if sym_meta.file_type().is_symlink() {
+              FsItemType::SymlinkUgh
+            } else {
+              FsItemType::Other
+            }
+          }
+          Err(_) => FsItemType::Other,
         };
 
         FsEntryType::Symlink {
@@ -678,7 +692,7 @@ mod test {
     let mut traversed = 0;
     for entry in WalkDir::new(&tmp_path) {
       let entry = entry.expect("walking directory");
-      let node = FsNode::try_from_node_source(entry).expect("creating node");
+      let node = FsNode::try_from_node_source(&entry).expect("creating node");
       assert_eq!(node.basename, "test-file");
       assert_eq!(node.path, tmp_path);
       assert_eq!(node.entry, FsEntryType::File { len: 0, });
@@ -691,7 +705,7 @@ mod test {
     traversed = 0;
     for entry in WalkDir::new(&tmp_path) {
       let entry = entry.expect("walking directory");
-      let node = FsNode::try_from_node_source(entry).expect("creating node");
+      let node = FsNode::try_from_node_source(&entry).expect("creating node");
       assert_eq!(node.basename, "test-file");
       assert_eq!(node.path, tmp_path);
       assert_eq!(node.entry, FsEntryType::File { len: 7, });
