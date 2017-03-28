@@ -180,7 +180,7 @@ impl FsNode {
             .or_insert_with(|| FsNode::empty_dir(path_so_far.clone(), comp_str.to_owned()))
             .ensure_and_return_parent(path_so_far, components)
         }
-        _ => panic!("Files should not exist in the middle of a path component."),
+        _ => bail!("Files should not exist in the middle of a path component."),
       }
     } else {
       Ok(self)
