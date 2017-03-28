@@ -46,6 +46,7 @@ mod errors {
       GlobError(::glob::PatternError);
       JsonError(::serde_json::Error);
       IoError(::std::io::Error);
+      WalkdirError(::walkdir::Error);
     }
   }
 }

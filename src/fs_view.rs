@@ -1,4 +1,5 @@
 use std;
+use std::borrow::Cow;
 use std::collections::BTreeMap;
 use std::fmt::Display;
 use std::fs::{DirEntry, read_link};
@@ -126,30 +127,27 @@ impl FsRootNode {
   }
 
   pub fn add_root(&mut self, path: &Path) -> Result<()> {
+    WalkDir::new(path).into_iter()
+      .map(|entry| {
+        entry.map(|f| -> Result<()> {
+          let node = FsNode::try_from_node_source(&f)?;
+          let mut components = f.path().components();
+          // we need to remove the final element from the path, as it corresponds to the DirEntry
+          components.next_back();
 
-    for entry in WalkDir::new(path) {
-      let entry = entry.chain_err(|| "unable to fetch walkdir entry")?;
-      let mut parent = {
-        let mut components = entry.path().components();
-        // we need to remove the final element from the path, as it corresponds to the DirEntry
-        components.next_back();
-        let path_buffer = PathBuf::new();
+          let parent = self.base.ensure_and_return_parent(PathBuf::new(), components)?;
 
-        self.base.ensure_and_return_parent(path_buffer, components)?
-      };
-
-      {
-        let new_node = FsNode::try_from_node_source(entry)?;
-        let basename = new_node.basename.to_owned();
-
-        match parent.entry {
-          FsEntryType::Directory { ref mut children } => {
-            children.insert(basename, new_node);
+          match parent.entry {
+            FsEntryType::Directory { ref mut children } => {
+              let basename = node.basename.to_owned();
+              children.insert(basename, node);
+            }
+            _ => bail!("Found a non-directory as the parent of a node."),
           }
-          _ => bail!("Found a non-directory as the parent of a node."),
-        }
-      }
-    }
+          Ok(())
+        })
+      })
+      .collect::<::std::result::Result<Vec<_>, _>>()?;
 
     Ok(())
   }
@@ -157,6 +155,7 @@ impl FsRootNode {
 
 impl FsNode {
   /// This should only be called if the node is a root node.
+  // TODO move this to FsRootNode, so this can be statically enforced.
   fn ensure_and_return_parent<'a, 'b>(
     &'a mut self,
     mut path_so_far: PathBuf,
@@ -196,7 +195,7 @@ impl FsNode {
     }
   }
 
-  fn try_from_node_source<S: NodeSource>(entry: S) -> Result<Self> {
+  fn try_from_node_source<S: NodeSource>(entry: &S) -> Result<Self> {
 
     let basename = match entry.path().file_name() {
       Some(n) => {
@@ -243,7 +242,7 @@ impl FsNode {
     };
 
     Ok(FsNode {
-      path: entry.path(),
+      path: entry.path().into_owned(),
       basename: basename,
       entry: entry_ty,
       mtime: metadata.mtime,
@@ -339,13 +338,13 @@ struct MetadataFromFs {
 }
 
 trait NodeSource {
-  fn path(&self) -> PathBuf;
+  fn path(&self) -> Cow<Path>;
   fn metadata(&self) -> Result<MetadataFromFs>;
 }
 
 impl NodeSource for walkdir::DirEntry {
-  fn path(&self) -> PathBuf {
-    self.path().to_path_buf()
+  fn path(&self) -> Cow<Path> {
+    Cow::Borrowed(&self.path())
   }
 
   fn metadata(&self) -> Result<MetadataFromFs> {
@@ -369,8 +368,8 @@ impl NodeSource for walkdir::DirEntry {
 }
 
 impl NodeSource for DirEntry {
-  fn path(&self) -> PathBuf {
-    self.path()
+  fn path(&self) -> Cow<Path> {
+    Cow::Owned(self.path())
   }
 
   fn metadata(&self) -> Result<MetadataFromFs> {
@@ -692,7 +691,7 @@ mod test {
     let mut traversed = 0;
     for entry in WalkDir::new(&tmp_path) {
       let entry = entry.expect("walking directory");
-      let node = FsNode::try_from_node_source(entry).expect("creating node");
+      let node = FsNode::try_from_node_source(&entry).expect("creating node");
       assert_eq!(node.basename, "test-file");
       assert_eq!(node.path, tmp_path);
       assert_eq!(node.entry, FsEntryType::File { len: 0, });
@@ -705,7 +704,7 @@ mod test {
     traversed = 0;
     for entry in WalkDir::new(&tmp_path) {
       let entry = entry.expect("walking directory");
-      let node = FsNode::try_from_node_source(entry).expect("creating node");
+      let node = FsNode::try_from_node_source(&entry).expect("creating node");
       assert_eq!(node.basename, "test-file");
       assert_eq!(node.path, tmp_path);
       assert_eq!(node.entry, FsEntryType::File { len: 7, });
