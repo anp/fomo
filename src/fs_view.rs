@@ -1,11 +1,12 @@
 use std;
 use std::borrow::Cow;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Display;
-use std::fs::{DirEntry, read_link};
+use std::fs::{DirEntry, metadata, read_link};
 use std::path::{Components, Path, PathBuf};
 
 use chrono::{DateTime, Local, UTC};
+use notify::DebouncedEvent;
 use walkdir;
 use walkdir::WalkDir;
 
@@ -22,6 +23,23 @@ pub struct FsNode {
   pub basename: String,
   pub entry: FsEntryType,
   pub mtime: DateTime<Local>,
+}
+
+pub enum ChangeEvent {
+  Create,
+  Delete,
+  Write,
+  Metadata,
+}
+
+pub struct FileEvent {
+  event: ChangeEvent,
+  file: FileResult,
+}
+
+pub struct Notification {
+  changes: Vec<FileEvent>,
+  root: PathBuf,
 }
 
 #[derive(Debug, Serialize)]
@@ -73,8 +91,6 @@ impl<'a> Iterator for FsIterator<'a> {
       None => (),
     };
 
-    // set current to the next to_visit item
-
     // return the previous current
     let returned = self.current;
 
@@ -95,6 +111,184 @@ impl FsRootNode {
       },
       roots: BTreeMap::new(),
     }
+  }
+
+  fn insert_node(&mut self, node: FsNode) -> Result<()> {
+    let basename = node.basename.clone();
+    let path = node.path.clone();
+    let mut components = path.components();
+    components.next_back();
+    match self.base
+      .ensure_and_return_parent(PathBuf::new(), components)
+      .chain_err(|| "unable to ensure parent for new node insertion")?
+      .entry {
+
+      FsEntryType::RootRoot { ref mut children } |
+      FsEntryType::Directory { ref mut children } => children.insert(basename, node),
+      _ => bail!("Found a non-directory node when ensuring parent of a node was in the tree"),
+    };
+    Ok(())
+  }
+
+  fn remove_node(&mut self, path: &Path) -> Option<FsNode> {
+    let mut components = path.components();
+    let basename = match components.next_back() {
+      Some(b) => b.as_os_str().to_string_lossy(),
+      None => return None,
+    };
+
+    if let Ok(parent) = self.base.ensure_and_return_parent(PathBuf::new(), components) {
+      match parent.entry {
+        FsEntryType::RootRoot { ref mut children } |
+        FsEntryType::Directory { ref mut children } => children.remove(&*basename),
+        _ => None,
+      }
+    } else {
+      None
+    }
+  }
+
+  fn needs_notification(&self, node: &FsNode) -> bool {
+    for (ref root, expr) in &self.roots {
+      if node.path.starts_with(root) && expr.matches(&node) {
+        return true;
+      }
+    }
+    false
+  }
+
+  pub fn consume_event(&mut self, event: DebouncedEvent) -> Result<Option<Notification>> {
+    let mut changes = Vec::new();
+    let event_root;
+
+    fn find_matching_root(
+      p: &PathBuf,
+      roots: &BTreeMap<PathBuf, QueryExpression>
+    ) -> Result<PathBuf> {
+      match roots.iter().map(|t| t.0).filter(|r| p.starts_with(r)).next() {
+        Some(r) => Ok(r.clone()),
+        None => {
+          bail!("lol adam is stupid, couldn't find {:?} in roots {:?}",
+                &p,
+                roots)
+        }
+      }
+    }
+
+    match event {
+      // TODO decide how to handle I/O notices vs. confirmations
+      DebouncedEvent::NoticeWrite(_) => return Ok(None),
+      DebouncedEvent::NoticeRemove(_) => return Ok(None),
+
+      DebouncedEvent::Create(ref p) => {
+        let node = FsNode::try_from_node_source(&p).chain_err(|| "constructing node from path")?;
+
+        if self.needs_notification(&node) {
+          changes.push(FileEvent {
+            event: ChangeEvent::Create,
+            file: FileResult::make(&node),
+          });
+        }
+
+        self.insert_node(node)?;
+        event_root = find_matching_root(p, &self.roots)?;
+      }
+
+      DebouncedEvent::Write(ref p) => {
+        let node = FsNode::try_from_node_source(&p).chain_err(|| "constructing node from path")?;
+
+        if self.needs_notification(&node) {
+          changes.push(FileEvent {
+            event: ChangeEvent::Write,
+            file: FileResult::make(&node),
+          });
+        }
+
+        self.insert_node(node)?;
+        event_root = find_matching_root(p, &self.roots)?;
+      }
+
+      DebouncedEvent::Chmod(ref p) => {
+        let node = FsNode::try_from_node_source(&p).chain_err(|| "constructing node from path")?;
+
+        if self.needs_notification(&node) {
+          changes.push(FileEvent {
+            event: ChangeEvent::Metadata,
+            file: FileResult::make(&node),
+          });
+        }
+
+        self.insert_node(node)?;
+        event_root = find_matching_root(p, &self.roots)?;
+      }
+
+      DebouncedEvent::Remove(ref p) => {
+
+        if let Some(old_node) = self.remove_node(p) {
+          if self.needs_notification(&old_node) {
+            changes.push(FileEvent {
+              event: ChangeEvent::Delete,
+              file: FileResult::make(&old_node),
+            });
+          }
+        }
+
+        event_root = find_matching_root(p, &self.roots)?;
+      }
+
+      DebouncedEvent::Rename(ref p, ref to) => {
+        let new_node =
+          FsNode::try_from_node_source(&to).chain_err(|| "constructing node from path")?;
+
+        if self.needs_notification(&new_node) {
+          changes.push(FileEvent {
+            event: ChangeEvent::Create,
+            file: FileResult::make(&new_node),
+          });
+        }
+
+        self.insert_node(new_node).unwrap();
+
+        if let Some(old_node) = self.remove_node(p) {
+          if self.needs_notification(&old_node) {
+            changes.push(FileEvent {
+              event: ChangeEvent::Delete,
+              file: FileResult::make(&old_node),
+            });
+          }
+        }
+
+        event_root = find_matching_root(p, &self.roots)?;
+      }
+
+      DebouncedEvent::Rescan => {
+        // ok so the old tree is invalid! yay!
+
+        // build a new tree
+        let mut new_fake_root = FsRootNode::new();
+
+        for ref root in self.roots.keys() {
+          new_fake_root.add_root(root)?;
+        }
+
+        // and make a best effort to notify our client of changes there
+        self.base.diff(&new_fake_root.base, &mut changes);
+        self.base = new_fake_root.base;
+
+        // TODO segment this into multiple notifications, one per root?
+
+        event_root = PathBuf::new();
+      }
+
+      DebouncedEvent::Error(e, opt_p) => {
+        bail!("notification error at path {:?}: {:?}", opt_p, e);
+      }
+    }
+
+    Ok(Some(Notification {
+      changes: changes,
+      root: event_root,
+    }))
   }
 
   pub fn eval(&mut self, query: Query) -> Result<QueryResult> {
@@ -183,6 +377,85 @@ impl FsNode {
       }
     } else {
       Ok(self)
+    }
+  }
+
+  pub fn diff(&self, new_node: &FsNode, results: &mut Vec<FileEvent>) {
+    if self.path != new_node.path {
+      panic!("bug: called diff on nodes without equal paths");
+    }
+
+    if self.basename != new_node.basename {
+      panic!("bug: called diff on nodes without equal basenames");
+    }
+
+    // we'll ignore mtime at this level, because it only really matters for files
+
+    match (&self.entry, &new_node.entry) {
+      (&FsEntryType::RootRoot { children: ref old_children },
+       &FsEntryType::RootRoot { children: ref new_children }) |
+      (&FsEntryType::Directory { children: ref old_children },
+       &FsEntryType::Directory { children: ref new_children }) => {
+
+        let old_files = old_children.keys().collect::<BTreeSet<_>>();
+        let new_files = new_children.keys().collect::<BTreeSet<_>>();
+
+        let in_both = old_files.intersection(&new_files).map(|s| *s).collect::<BTreeSet<_>>();
+
+        for &deleted_basename in old_files.difference(&in_both) {
+          let deleted_node = old_children.get(deleted_basename).unwrap();
+
+          results.push(FileEvent {
+            event: ChangeEvent::Delete,
+            file: FileResult::make(deleted_node),
+          });
+        }
+
+        for &created_basename in new_files.difference(&in_both) {
+          let created_node = new_children.get(created_basename).unwrap();
+
+          results.push(FileEvent {
+            event: ChangeEvent::Create,
+            file: FileResult::make(created_node),
+          });
+        }
+
+        for basename in in_both {
+          let before = old_children.get(basename).unwrap();
+          let after = old_children.get(basename).unwrap();
+
+          before.diff(after, results);
+        }
+      }
+      (&FsEntryType::File { len: old_length }, &FsEntryType::File { len: new_length }) => {
+        match self.mtime.cmp(&new_node.mtime) {
+          ::std::cmp::Ordering::Less => {
+            results.push(FileEvent {
+              event: ChangeEvent::Write,
+              file: FileResult::make(&new_node),
+            });
+          }
+          _ => {
+            // only generate a notification b/c of length if the mtimes are the same
+            if old_length != new_length {
+              results.push(FileEvent {
+                event: ChangeEvent::Write,
+                file: FileResult::make(&new_node),
+              });
+            }
+          }
+        }
+      }
+      (&FsEntryType::Symlink { target: ref old_target, ty: old_ty },
+       &FsEntryType::Symlink { target: ref new_target, ty: new_ty }) => {
+        if old_target != new_target || old_ty != new_ty {
+          results.push(FileEvent {
+            event: ChangeEvent::Write,
+            file: FileResult::make(&new_node),
+          });
+        }
+      }
+      _ => unimplemented!(),
     }
   }
 
@@ -342,6 +615,29 @@ trait NodeSource {
   fn metadata(&self) -> Result<MetadataFromFs>;
 }
 
+impl<'a> NodeSource for &'a PathBuf {
+  fn path(&self) -> Cow<Path> {
+    Cow::Borrowed(self.as_ref())
+  }
+
+  fn metadata(&self) -> Result<MetadataFromFs> {
+    let md = metadata(self).chain_err(|| "unable to read path metadata")?;
+    let mtime = system_time_to_date_time(md.modified().chain_err(|| "unable to read mtime")?);
+
+    Ok(MetadataFromFs {
+      mtime: mtime,
+      len: md.len(),
+      ty: if md.is_file() {
+        FsItemType::File
+      } else if md.is_dir() {
+        FsItemType::Directory
+      } else {
+        FsItemType::SymlinkUgh
+      },
+    })
+  }
+}
+
 impl NodeSource for walkdir::DirEntry {
   fn path(&self) -> Cow<Path> {
     Cow::Borrowed(&self.path())
@@ -351,7 +647,6 @@ impl NodeSource for walkdir::DirEntry {
     let md = self.metadata().chain_err(|| "unable to read file metadata")?;
     let mtime = system_time_to_date_time(md.modified()
       .chain_err(|| "unable to read modification time")?);
-
 
     Ok(MetadataFromFs {
       mtime: mtime,
@@ -401,25 +696,6 @@ mod test {
   use walkdir::WalkDir;
 
   use super::*;
-
-  impl FsRootNode {
-    pub fn insert_node(&mut self, node: FsNode) -> Result<()> {
-      let basename = node.basename.clone();
-      let path = node.path.clone();
-      let mut components = path.components();
-      components.next_back();
-      match self.base
-        .ensure_and_return_parent(PathBuf::new(), components)
-        .chain_err(|| "unable to ensure parent for new node insertion")?
-        .entry {
-
-        FsEntryType::RootRoot { ref mut children } |
-        FsEntryType::Directory { ref mut children } => children.insert(basename, node),
-        _ => panic!("Found a non-directory node when ensuring parent of a node was in the tree"),
-      };
-      Ok(())
-    }
-  }
 
   impl FsNode {
     /// WARNING: Only call this in tests when you've carefully constructed a tree inside a
