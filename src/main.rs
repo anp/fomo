@@ -24,6 +24,7 @@ extern crate error_chain;
 extern crate glob;
 #[macro_use]
 extern crate log;
+extern crate notify;
 extern crate regex;
 extern crate serde;
 #[macro_use]
