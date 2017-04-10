@@ -25,6 +25,7 @@ pub struct FsNode {
   pub mtime: DateTime<Local>,
 }
 
+#[derive(Clone, Copy)]
 pub enum ChangeEvent {
   Create,
   Delete,
@@ -455,7 +456,30 @@ impl FsNode {
           });
         }
       }
-      _ => unimplemented!(),
+      (&FsEntryType::File { len }, &FsEntryType::Directory { ref children }) |
+      (&FsEntryType::File { len }, &FsEntryType::RootRoot { ref children }) => {}
+
+      // if the node types differ, just generate create/delete events for everything
+      _ => {
+        self.gen_events_for_self_and_children(ChangeEvent::Delete, results);
+        new_node.gen_events_for_self_and_children(ChangeEvent::Create, results);
+      }
+    }
+  }
+
+  fn gen_events_for_self_and_children(&self, event: ChangeEvent, changes: &mut Vec<FileEvent>) {
+    changes.push(FileEvent {
+      event: event,
+      file: FileResult::make(self),
+    });
+
+    match &self.entry {
+      &FsEntryType::RootRoot { ref children } => {
+        for node in children.values() {
+          node.gen_events_for_self_and_children(event, changes);
+        }
+      }
+      _ => (),
     }
   }
 
