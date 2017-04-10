@@ -456,8 +456,6 @@ impl FsNode {
           });
         }
       }
-      (&FsEntryType::File { len }, &FsEntryType::Directory { ref children }) |
-      (&FsEntryType::File { len }, &FsEntryType::RootRoot { ref children }) => {}
 
       // if the node types differ, just generate create/delete events for everything
       _ => {
