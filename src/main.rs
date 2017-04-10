@@ -18,6 +18,7 @@
 
 extern crate chrono;
 extern crate clap;
+extern crate crossbeam;
 extern crate env_logger;
 #[macro_use]
 extern crate error_chain;
@@ -37,6 +38,7 @@ extern crate tempdir;
 
 use std::collections::BTreeMap;
 use std::io::prelude::*;
+use std::sync::mpsc::channel;
 
 use clap::App;
 
@@ -47,6 +49,7 @@ mod errors {
       GlobError(::glob::PatternError);
       JsonError(::serde_json::Error);
       IoError(::std::io::Error);
+      StdoutMpscError(::std::sync::mpsc::SendError<String>);
       WalkdirError(::walkdir::Error);
     }
   }
@@ -82,10 +85,8 @@ See https://docs.rs/env_logger/ for details.")
   info!("Initializing stdin/stdout handles");
   let stdin = ::std::io::stdin();
   let stdin = stdin.lock();
-  let stdout = ::std::io::stdout();
-  let stdout = stdout.lock();
 
-  run_for_realsies(stdin, stdout)
+  run_for_realsies(stdin)
 }
 
 const ERROR_TYPE_KEY: &'static str = "error";
@@ -93,66 +94,83 @@ const HUMAN_ERROR_KEY: &'static str = "humanError";
 const QUERY_STRING_KEY: &'static str = "queryString";
 const ID_KEY: &'static str = "id";
 
-fn run_for_realsies<R, W>(stdin: R, mut stdout: W) -> Result<()>
-  where R: Read + BufRead,
-        W: Write
+fn run_for_realsies<R>(stdin: R) -> Result<()>
+  where R: Read + BufRead
 {
-  let mut fs = fs_view::FsRootNode::new();
+  crossbeam::scope(|scope| {
+    let (stdout_tx, stdout_rx) = channel();
 
-  info!("listening to stdin for queries");
-  for input in stdin.lines() {
-    let input = input.chain_err(|| "reading from stdin")?;
-
-    // build this incrementally at each stage in case we need to send it back
-    let mut error_map = BTreeMap::new();
-    error_map.insert(QUERY_STRING_KEY, input.clone());
-
-    let query: query::Query = match serde_json::from_str(&input) {
-      Ok(q) => q,
-      Err(why) => {
-
-        error!("Parsing query failed: {:?}. Query string: '{}'", why, input);
-        error_map.insert(ERROR_TYPE_KEY, "parse".to_string());
-
-        // let's see if we can find the id of the query at least
-        match serde_json::from_str::<query::PartialQuery>(&input) {
-          Ok(p) => {
-            error_map.insert(ID_KEY, p.id);
-            error_map.insert(HUMAN_ERROR_KEY,
-                             format!("Unable to parse query object: {:?}", why));
-          }
+    scope.spawn(|| {
+      let stdout = ::std::io::stdout();
+      let mut stdout = stdout.lock();
+      for l in stdout_rx {
+        match writeln!(&mut stdout, "{}", l) {
+          Ok(_) => (),
           Err(why) => {
-            error!("Unable to retrieve id from query string: {:?}", why);
-            error_map.insert(HUMAN_ERROR_KEY,
-                             format!("Unable to parse query or even id from query object: {:?}",
-                                     why));
+            error!("can't write to stdout: {:?}", why);
+            ::std::process::exit(1);
           }
         }
-
-        writeln!(&mut stdout, "{}", serde_json::to_string(&error_map)?)?;
-        continue;
       }
-    };
+    });
 
-    error_map.insert(ID_KEY, query.id.clone());
+    let mut fs = fs_view::FsRootNode::new();
 
-    // ok we finally have a valid query
-    let res = match fs.eval(query) {
-      Ok(r) => r,
-      Err(why) => {
-        error!("Unable to evaluate query: {:?}", why);
-        error_map.insert(ERROR_TYPE_KEY, "eval".to_string());
-        error_map.insert(HUMAN_ERROR_KEY,
-                         format!("Problem evaluating query: {:?}", why));
+    info!("listening to stdin for queries");
+    for input in stdin.lines() {
+      let input = input.chain_err(|| "reading from stdin")?;
 
-        writeln!(&mut stdout, "{}", serde_json::to_string(&error_map)?)?;
-        continue;
-      }
-    };
+      // build this incrementally at each stage in case we need to send it back
+      let mut error_map = BTreeMap::new();
+      error_map.insert(QUERY_STRING_KEY, input.clone());
 
-    writeln!(&mut stdout, "{}", serde_json::to_string(&res)?)?;
-  }
-  Ok(())
+      let query: query::Query = match serde_json::from_str(&input) {
+        Ok(q) => q,
+        Err(why) => {
+
+          error!("Parsing query failed: {:?}. Query string: '{}'", why, input);
+          error_map.insert(ERROR_TYPE_KEY, "parse".to_string());
+
+          // let's see if we can find the id of the query at least
+          match serde_json::from_str::<query::PartialQuery>(&input) {
+            Ok(p) => {
+              error_map.insert(ID_KEY, p.id);
+              error_map.insert(HUMAN_ERROR_KEY,
+                               format!("Unable to parse query object: {:?}", why));
+            }
+            Err(why) => {
+              error!("Unable to retrieve id from query string: {:?}", why);
+              error_map.insert(HUMAN_ERROR_KEY,
+                               format!("Unable to parse query or even id from query object: {:?}",
+                                       why));
+            }
+          }
+
+          stdout_tx.send(serde_json::to_string(&error_map)?)?;
+          continue;
+        }
+      };
+
+      error_map.insert(ID_KEY, query.id.clone());
+
+      // ok we finally have a valid query
+      let res = match fs.eval(query) {
+        Ok(r) => r,
+        Err(why) => {
+          error!("Unable to evaluate query: {:?}", why);
+          error_map.insert(ERROR_TYPE_KEY, "eval".to_string());
+          error_map.insert(HUMAN_ERROR_KEY,
+                           format!("Problem evaluating query: {:?}", why));
+
+          stdout_tx.send(serde_json::to_string(&error_map)?)?;
+          continue;
+        }
+      };
+
+      stdout_tx.send(serde_json::to_string(&res)?)?;
+    }
+    Ok(())
+  })
 }
 
 // TODO(dikaiosune) write a catch_panic facade that restarts everything
