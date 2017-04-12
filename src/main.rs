@@ -94,11 +94,16 @@ const HUMAN_ERROR_KEY: &'static str = "humanError";
 const QUERY_STRING_KEY: &'static str = "queryString";
 const ID_KEY: &'static str = "id";
 
+enum RootMessage {
+  Query(BTreeMap<&'static str, String>, query::Query),
+}
+
 fn run_for_realsies<R>(stdin: R) -> Result<()>
   where R: Read + BufRead
 {
   crossbeam::scope(|scope| {
     let (stdout_tx, stdout_rx) = channel();
+    let (root_tx, root_rx) = channel();
 
     scope.spawn(|| {
       let stdout = ::std::io::stdout();
@@ -107,6 +112,7 @@ fn run_for_realsies<R>(stdin: R) -> Result<()>
         match writeln!(&mut stdout, "{}", l) {
           Ok(_) => (),
           Err(why) => {
+            // if this happens there's no way you're getting file events from the kernel
             error!("can't write to stdout: {:?}", why);
             ::std::process::exit(1);
           }
@@ -114,9 +120,65 @@ fn run_for_realsies<R>(stdin: R) -> Result<()>
       }
     });
 
-    let mut fs = fs_view::FsRootNode::new();
+    // spawn the fs root thread
+    let fs_stdout_tx = stdout_tx.clone();
+    scope.spawn(move || {
+      let mut fs = fs_view::FsRootNode::new();
+      // ok we finally have a valid query
+      for msg in root_rx {
+        match msg {
+          RootMessage::Query(mut error_map, query) => {
+            let res = match fs.eval(query) {
+              Ok(r) => r,
+              Err(why) => {
+                error!("Unable to evaluate query: {:?}", why);
+                error_map.insert(ERROR_TYPE_KEY, "eval".to_string());
+                error_map.insert(HUMAN_ERROR_KEY,
+                                 format!("Problem evaluating query: {:?}", why));
+
+                match serde_json::to_string(&error_map) {
+                  Ok(s) => {
+                    match fs_stdout_tx.send(s) {
+                      Ok(_) => (),
+                      Err(why) => {
+                        error!("yeah this should never happen. unable to send mpsc msg: {:?}",
+                               why)
+                      }
+                    }
+                  }
+                  Err(why) => {
+                    error!("unable to serialize value to JSON, this is definitely a bug: {:?}",
+                           why)
+                  }
+                }
+                continue;
+              }
+            };
+
+            match serde_json::to_string(&res) {
+              Ok(s) => {
+                match fs_stdout_tx.send(s) {
+                  Ok(_) => (),
+                  Err(why) => {
+                    error!("mpsc send failed inexplicably: {:?}", why);
+                    ::std::process::exit(1);
+                  }
+                }
+              }
+              Err(why) => {
+                error!("unable to serialize a definitely-serializable value: {:?}",
+                       why);
+                ::std::process::exit(1);
+              }
+
+            }
+          }
+        }
+      }
+    });
 
     info!("listening to stdin for queries");
+    let err_stdout_tx = stdout_tx.clone();
     for input in stdin.lines() {
       let input = input.chain_err(|| "reading from stdin")?;
 
@@ -146,28 +208,20 @@ fn run_for_realsies<R>(stdin: R) -> Result<()>
             }
           }
 
-          stdout_tx.send(serde_json::to_string(&error_map)?)?;
+          err_stdout_tx.send(serde_json::to_string(&error_map)?)?;
           continue;
         }
       };
 
       error_map.insert(ID_KEY, query.id.clone());
 
-      // ok we finally have a valid query
-      let res = match fs.eval(query) {
-        Ok(r) => r,
+      match root_tx.send(RootMessage::Query(error_map, query)) {
+        Ok(_) => (),
         Err(why) => {
-          error!("Unable to evaluate query: {:?}", why);
-          error_map.insert(ERROR_TYPE_KEY, "eval".to_string());
-          error_map.insert(HUMAN_ERROR_KEY,
-                           format!("Problem evaluating query: {:?}", why));
-
-          stdout_tx.send(serde_json::to_string(&error_map)?)?;
-          continue;
+          error!("mpsc send failed: {:?}", why);
+          ::std::process::exit(1);
         }
-      };
-
-      stdout_tx.send(serde_json::to_string(&res)?)?;
+      }
     }
     Ok(())
   })
