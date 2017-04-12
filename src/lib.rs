@@ -17,21 +17,29 @@
 #![recursion_limit = "1024"]
 
 extern crate chrono;
-extern crate clap;
 extern crate crossbeam;
-extern crate env_logger;
 #[macro_use]
 extern crate error_chain;
 extern crate glob;
 #[macro_use]
 extern crate log;
-extern crate notify;
 extern crate regex;
 extern crate serde;
 #[macro_use]
 extern crate serde_derive;
 extern crate serde_json;
 extern crate walkdir;
+
+#[macro_use]
+extern crate bitflags;
+#[cfg(target_os="linux")]
+extern crate mio;
+#[cfg(target_os="macos")]
+extern crate fsevent_sys;
+#[cfg(target_os="windows")]
+extern crate winapi;
+extern crate libc;
+extern crate filetime;
 
 #[cfg(test)]
 extern crate tempdir;
@@ -40,9 +48,7 @@ use std::collections::BTreeMap;
 use std::io::prelude::*;
 use std::sync::mpsc::channel;
 
-use clap::App;
-
-mod errors {
+pub mod errors {
   // Create the Error, ErrorKind, ResultExt, and Result types
   error_chain!{
     foreign_links {
@@ -57,37 +63,12 @@ mod errors {
 
 pub mod fs_view;
 mod glob_wrapper;
+pub mod notify;
 pub mod query;
 mod regex_wrapper;
 mod times;
 
 use errors::*;
-
-fn run() -> Result<()> {
-  env_logger::LogBuilder::new()
-    .format(|rec: &log::LogRecord| format!("{}:{}", rec.level(), rec.args()))
-    .filter(None, log::LogLevelFilter::Debug)
-    .init()
-    .unwrap();
-
-  // don't need any arguments, as they should be passed by env var
-  // but we want a nice help message for them
-  // TODO write help message about env vars
-  App::new(env!("CARGO_PKG_NAME"))
-    .version(env!("CARGO_PKG_VERSION"))
-    .author(env!("CARGO_PKG_AUTHORS"))
-    .about(env!("CARGO_PKG_DESCRIPTION"))
-    .before_help("Logging can be configured via the RUST_LOG environment variable.
-See https://docs.rs/env_logger/ for details.")
-    .get_matches();
-
-  // acquire exclusive use of stdin/stdout
-  info!("Initializing stdin/stdout handles");
-  let stdin = ::std::io::stdin();
-  let stdin = stdin.lock();
-
-  run_for_realsies(stdin)
-}
 
 const ERROR_TYPE_KEY: &'static str = "error";
 const HUMAN_ERROR_KEY: &'static str = "humanError";
@@ -98,7 +79,7 @@ enum RootMessage {
   Query(BTreeMap<&'static str, String>, query::Query),
 }
 
-fn run_for_realsies<R>(stdin: R) -> Result<()>
+pub fn run_for_realsies<R>(stdin: R) -> Result<()>
   where R: Read + BufRead
 {
   crossbeam::scope(|scope| {
@@ -226,9 +207,6 @@ fn run_for_realsies<R>(stdin: R) -> Result<()>
     Ok(())
   })
 }
-
-// TODO(dikaiosune) write a catch_panic facade that restarts everything
-quick_main!(run);
 
 #[derive(Deserialize, Serialize)]
 struct StartupMessage {

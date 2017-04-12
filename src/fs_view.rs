@@ -6,11 +6,11 @@ use std::fs::{DirEntry, metadata, read_link};
 use std::path::{Components, Path, PathBuf};
 
 use chrono::{DateTime, Local, UTC};
-use notify::DebouncedEvent;
 use walkdir;
 use walkdir::WalkDir;
 
 use errors::*;
+use notify::DebouncedEvent;
 use query::{FileResult, Query, QueryExpression, QueryResult};
 use times::system_time_to_date_time;
 
