@@ -32,7 +32,7 @@ use std::sync::{Arc, Mutex};
 use std::sync::mpsc::{Receiver, Sender, channel};
 use std::thread;
 use std::time::Duration;
-use super::{DebouncedEvent, Error, RawEvent, RecursiveMode, Result, Watcher, op};
+use super::{Error, RawEvent, RecursiveMode, Result, Watcher, op};
 use super::debounce::{Debounce, EventTx};
 
 /// FSEvents-based `Watcher` implementation
@@ -338,7 +338,7 @@ impl Watcher for FsEventWatcher {
     })
   }
 
-  fn new(tx: Sender<DebouncedEvent>, delay: Duration) -> Result<FsEventWatcher> {
+  fn new(tx: Sender<::RootMessage>, delay: Duration) -> Result<FsEventWatcher> {
     Ok(FsEventWatcher {
       paths: unsafe {
         cf::CFArrayCreateMutable(cf::kCFAllocatorDefault, 0, &cf::kCFTypeArrayCallBacks)

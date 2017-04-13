@@ -428,7 +428,7 @@ impl ReadDirectoryChangesWatcher {
   }
 
   pub fn create_debounced(
-    tx: Sender<DebouncedEvent>,
+    tx: Sender<::RootMessage>,
     meta_tx: Sender<MetaEvent>,
     delay: Duration
   ) -> Result<ReadDirectoryChangesWatcher> {
@@ -499,7 +499,7 @@ impl Watcher for ReadDirectoryChangesWatcher {
     ReadDirectoryChangesWatcher::create(tx, meta_tx)
   }
 
-  fn new(tx: Sender<DebouncedEvent>, delay: Duration) -> Result<ReadDirectoryChangesWatcher> {
+  fn new(tx: Sender<::RootMessage>, delay: Duration) -> Result<ReadDirectoryChangesWatcher> {
     // create dummy channel for meta event
     let (meta_tx, _) = channel();
     ReadDirectoryChangesWatcher::create_debounced(tx, meta_tx, delay)

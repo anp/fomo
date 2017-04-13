@@ -47,6 +47,9 @@ extern crate tempdir;
 use std::collections::BTreeMap;
 use std::io::prelude::*;
 use std::sync::mpsc::channel;
+use std::time::Duration;
+
+use notify::{RecursiveMode, Watcher};
 
 pub mod errors {
   // Create the Error, ErrorKind, ResultExt, and Result types
@@ -75,8 +78,10 @@ const HUMAN_ERROR_KEY: &'static str = "humanError";
 const QUERY_STRING_KEY: &'static str = "queryString";
 const ID_KEY: &'static str = "id";
 
-enum RootMessage {
+#[derive(Debug)]
+pub enum RootMessage {
   Query(BTreeMap<&'static str, String>, query::Query),
+  Event(notify::DebouncedEvent),
 }
 
 pub fn run_for_realsies<R>(stdin: R) -> Result<()>
@@ -103,14 +108,68 @@ pub fn run_for_realsies<R>(stdin: R) -> Result<()>
 
     // spawn the fs root thread
     let fs_stdout_tx = stdout_tx.clone();
+    let watcher_root_tx = root_tx.clone();
     scope.spawn(move || {
       let mut fs = fs_view::FsRootNode::new();
+      let mut watcher = match notify::watcher(watcher_root_tx, Duration::from_millis(300)) {
+        Ok(w) => w,
+        Err(why) => {
+          error!("Unable to start file watcher: {:?}", why);
+          ::std::process::exit(1);
+        }
+      };
+
       // ok we finally have a valid query
       for msg in root_rx {
         match msg {
+          RootMessage::Event(event) => {
+            match fs.consume_event(event) {
+              Ok(Some(notif)) => {
+                match serde_json::to_string(&notif) {
+                  Ok(s) => {
+                    match fs_stdout_tx.send(s) {
+                      Ok(_) => (),
+                      Err(why) => {
+                        error!("mpsc send failed! {:?}", why);
+                        ::std::process::exit(1);
+                      }
+                    }
+                  }
+                  Err(why) => {
+                    error!("unable to encode notification ({:?}) as JSON: {:?}",
+                           notif,
+                           why);
+                    ::std::process::exit(1);
+                  }
+                }
+              }
+              Ok(None) => (),
+              Err(why) => {
+                error!("unable to consume event: {:?}", why);
+                // FIXME notify the client of this somehow
+              }
+            }
+          }
           RootMessage::Query(mut error_map, query) => {
+            let to_watch = if query.watch {
+              Some(query.root.clone())
+            } else {
+              None
+            };
+
             let res = match fs.eval(query) {
-              Ok(r) => r,
+              Ok(r) => {
+                if let Some(watch_root) = to_watch {
+                  match watcher.watch(&watch_root, RecursiveMode::Recursive) {
+                    Ok(_) => (),
+                    Err(why) => {
+                      error!("unable to watch root {:?}: {:?}", watch_root, why);
+                      ::std::process::exit(1);
+                    }
+                  }
+                }
+                r
+              }
               Err(why) => {
                 error!("Unable to evaluate query: {:?}", why);
                 error_map.insert(ERROR_TYPE_KEY, "eval".to_string());

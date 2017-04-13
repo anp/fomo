@@ -13,7 +13,7 @@ use std::sync::{Arc, Mutex, RwLock};
 use std::sync::mpsc::Sender;
 use std::thread;
 use std::time::{Duration, Instant};
-use super::{DebouncedEvent, Error, RawEvent, RecursiveMode, Result, Watcher, op};
+use super::{Error, RawEvent, RecursiveMode, Result, Watcher, op};
 use super::debounce::{Debounce, EventTx};
 
 extern crate walkdir;
@@ -175,7 +175,7 @@ impl Watcher for PollWatcher {
     PollWatcher::with_delay_ms(tx, 30_000)
   }
 
-  fn new(tx: Sender<DebouncedEvent>, delay: Duration) -> Result<PollWatcher> {
+  fn new(tx: Sender<::RootMessage>, delay: Duration) -> Result<PollWatcher> {
     let mut p = PollWatcher {
       event_tx: EventTx::DebouncedTx { tx: tx.clone(), },
       watches: Arc::new(Mutex::new(HashMap::new())),

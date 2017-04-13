@@ -39,7 +39,7 @@ struct ScheduleWorker {
   request_source: mpsc::Receiver<Action>,
   schedule: BinaryHeap<ScheduledEvent>,
   ignore: HashSet<u64>,
-  tx: mpsc::Sender<DebouncedEvent>,
+  tx: mpsc::Sender<::RootMessage>,
   operations_buffer: OperationsBuffer,
 }
 
@@ -47,7 +47,7 @@ impl ScheduleWorker {
   fn new(
     trigger: Arc<Condvar>,
     request_source: mpsc::Receiver<Action>,
-    tx: mpsc::Sender<DebouncedEvent>,
+    tx: mpsc::Sender<::RootMessage>,
     operations_buffer: OperationsBuffer
   ) -> ScheduleWorker {
     ScheduleWorker {
@@ -91,7 +91,9 @@ impl ScheduleWorker {
           if let Some((op, from_path, _)) = op_buf.remove(&path) {
             let is_partial_rename = from_path.is_none();
             if let Some(from_path) = from_path {
-              self.tx.send(DebouncedEvent::Rename(from_path, path.clone())).unwrap();
+              self.tx
+                .send(::RootMessage::Event(DebouncedEvent::Rename(from_path, path.clone())))
+                .unwrap();
             }
             let message = match op {
               Some(op::CREATE) => Some(DebouncedEvent::Create(path)),
@@ -108,7 +110,7 @@ impl ScheduleWorker {
               _ => None,
             };
             if let Some(m) = message {
-              let _ = self.tx.send(m);
+              let _ = self.tx.send(::RootMessage::Event(m));
             }
           } else {
             // TODO error!("path not found in operations_buffer: {}", path.display())
@@ -165,7 +167,7 @@ pub struct WatchTimer {
 
 impl WatchTimer {
   pub fn new(
-    tx: mpsc::Sender<DebouncedEvent>,
+    tx: mpsc::Sender<::RootMessage>,
     operations_buffer: OperationsBuffer,
     delay: Duration
   ) -> WatchTimer {

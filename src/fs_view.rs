@@ -25,7 +25,7 @@ pub struct FsNode {
   pub mtime: DateTime<Local>,
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug, Serialize)]
 pub enum ChangeEvent {
   Create,
   Delete,
@@ -33,11 +33,13 @@ pub enum ChangeEvent {
   Metadata,
 }
 
+#[derive(Debug, Serialize)]
 pub struct FileEvent {
   event: ChangeEvent,
   file: FileResult,
 }
 
+#[derive(Debug, Serialize)]
 pub struct Notification {
   changes: Vec<FileEvent>,
   root: PathBuf,

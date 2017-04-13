@@ -397,7 +397,7 @@ impl Watcher for INotifyWatcher {
       .map_err(Error::Io)
   }
 
-  fn new(tx: Sender<DebouncedEvent>, delay: Duration) -> Result<INotifyWatcher> {
+  fn new(tx: Sender<::RootMessage>, delay: Duration) -> Result<INotifyWatcher> {
     INotify::init()
       .and_then(|inotify| EventLoop::new().map(|l| (inotify, l)))
       .and_then(|(inotify, mut event_loop)| {

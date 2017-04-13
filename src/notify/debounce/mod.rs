@@ -18,10 +18,10 @@ pub type OperationsBuffer = Arc<Mutex<HashMap<PathBuf,
 pub enum EventTx {
   Raw { tx: mpsc::Sender<RawEvent>, },
   Debounced {
-    tx: mpsc::Sender<DebouncedEvent>,
+    tx: mpsc::Sender<::RootMessage>,
     debounce: Debounce,
   },
-  DebouncedTx { tx: mpsc::Sender<DebouncedEvent>, },
+  DebouncedTx { tx: mpsc::Sender<::RootMessage>, },
 }
 
 impl EventTx {
@@ -33,7 +33,7 @@ impl EventTx {
       EventTx::Debounced { ref tx, ref mut debounce } => {
         match (event.path, event.op, event.cookie) {
           (None, Ok(op::RESCAN), None) => {
-            let _ = tx.send(DebouncedEvent::Rescan);
+            let _ = tx.send(::RootMessage::Event(DebouncedEvent::Rescan));
           }
           (Some(path), Ok(op), cookie) => {
             debounce.event(path, op, cookie);
@@ -42,14 +42,14 @@ impl EventTx {
             // TODO panic!("path is None: {:?} ({:?})", _op, _cookie);
           }
           (path, Err(e), _) => {
-            let _ = tx.send(DebouncedEvent::Error(e, path));
+            let _ = tx.send(::RootMessage::Event(DebouncedEvent::Error(e, path)));
           }
         }
       }
       EventTx::DebouncedTx { ref tx } => {
         match (event.path, event.op, event.cookie) {
           (None, Ok(op::RESCAN), None) => {
-            let _ = tx.send(DebouncedEvent::Rescan);
+            let _ = tx.send(::RootMessage::Event(DebouncedEvent::Rescan));
           }
           (Some(_path), Ok(_op), _cookie) => {
             // TODO debounce.event(_path, _op, _cookie);
@@ -58,7 +58,7 @@ impl EventTx {
             // TODO panic!("path is None: {:?} ({:?})", _op, _cookie);
           }
           (path, Err(e), _) => {
-            let _ = tx.send(DebouncedEvent::Error(e, path));
+            let _ = tx.send(::RootMessage::Event(DebouncedEvent::Error(e, path)));
           }
         }
       }
@@ -67,7 +67,7 @@ impl EventTx {
 }
 
 pub struct Debounce {
-  tx: mpsc::Sender<DebouncedEvent>,
+  tx: mpsc::Sender<::RootMessage>,
   operations_buffer: OperationsBuffer,
   rename_path: Option<PathBuf>,
   rename_cookie: Option<u32>,
@@ -75,7 +75,7 @@ pub struct Debounce {
 }
 
 impl Debounce {
-  pub fn new(delay: Duration, tx: mpsc::Sender<DebouncedEvent>) -> Debounce {
+  pub fn new(delay: Duration, tx: mpsc::Sender<::RootMessage>) -> Debounce {
     let operations_buffer: OperationsBuffer = Arc::new(Mutex::new(HashMap::new()));
 
     // spawns new thread
@@ -138,7 +138,8 @@ impl Debounce {
                             Some(op::WRITE) | // change to remove event
                             Some(op::CHMOD) => { // change to remove event
                                 *operation = Some(op::REMOVE);
-                                let _ = self.tx.send(DebouncedEvent::NoticeRemove(path.clone()));
+                                let _ = self.tx.send(
+                                  ::RootMessage::Event(DebouncedEvent::NoticeRemove(path.clone())));
                                 restart_timer(timer_id, path, &mut self.timer);
                             }
                             Some(op::RENAME) => {
@@ -174,7 +175,7 @@ impl Debounce {
 
   pub fn event(&mut self, path: PathBuf, mut op: op::Op, cookie: Option<u32>) {
     if op.contains(op::RESCAN) {
-      let _ = self.tx.send(DebouncedEvent::Rescan);
+      let _ = self.tx.send(::RootMessage::Event(DebouncedEvent::Rescan));
     }
 
     if self.rename_path.is_some() {
@@ -250,7 +251,8 @@ impl Debounce {
                     // operations_buffer entry didn't exist
                     None => {
                         *operation = Some(op::WRITE);
-                        let _ = self.tx.send(DebouncedEvent::NoticeWrite(path.clone()));
+                        let _ = self.tx.send(
+                          ::RootMessage::Event(DebouncedEvent::NoticeWrite(path.clone())));
                         restart_timer(timer_id, path.clone(), &mut self.timer);
                     }
 
@@ -373,14 +375,16 @@ impl Debounce {
 
                         // keep chmod event
                         Some(op::CHMOD) => {
-                            let _ = self.tx.send(DebouncedEvent::NoticeRemove(path.clone()));
+                            let _ = self.tx.send(
+                              ::RootMessage::Event(DebouncedEvent::NoticeRemove(path.clone())));
                             restart_timer(timer_id, path.clone(), &mut self.timer);
                         }
 
                         // operations_buffer entry didn't exist
                         None => {
                             *operation = Some(op::RENAME);
-                            let _ = self.tx.send(DebouncedEvent::NoticeRemove(path.clone()));
+                            let _ = self.tx.send(
+                              ::RootMessage::Event(DebouncedEvent::NoticeRemove(path.clone())));
                             restart_timer(timer_id, path.clone(), &mut self.timer);
                         }
 
@@ -422,7 +426,8 @@ impl Debounce {
                         // operations_buffer entry didn't exist
                         None => {
                             *operation = Some(op::REMOVE);
-                            let _ = self.tx.send(DebouncedEvent::NoticeRemove(path.clone()));
+                            let _ = self.tx.send(
+                              ::RootMessage::Event(DebouncedEvent::NoticeRemove(path.clone())));
                             restart_timer(timer_id, path.clone(), &mut self.timer);
                         }
 

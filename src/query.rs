@@ -24,6 +24,8 @@ pub struct Query {
   pub root: PathBuf,
   #[serde(default)]
   pub expr: QueryExpression,
+  #[serde(default)]
+  pub watch: bool,
 }
 
 /// A fallback struct to deserialize into if we can't construct a Query.
@@ -38,7 +40,7 @@ pub struct QueryResult {
   pub files: Vec<FileResult>,
 }
 
-#[derive(Serialize)]
+#[derive(Debug, Serialize)]
 pub struct FileResult {
   path: PathBuf,
   name: String,

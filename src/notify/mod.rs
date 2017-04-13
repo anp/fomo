@@ -95,7 +95,7 @@
 //! documentation.
 
 
-
+use super::RootMessage;
 pub use self::op::Op;
 use std::io;
 use std::path::{Path, PathBuf};
@@ -609,7 +609,7 @@ pub trait Watcher: Sized {
   /// If a file is saved very slowly, you might receive a `Write` event even though the
   /// file is
   /// still being written to.
-  fn new(tx: Sender<DebouncedEvent>, delay: Duration) -> Result<Self>;
+  fn new(tx: Sender<RootMessage>, delay: Duration) -> Result<Self>;
 
   /// Begin watching a new path.
   ///
@@ -659,7 +659,7 @@ pub fn raw_watcher(tx: Sender<RawEvent>) -> Result<RecommendedWatcher> {
 /// platform in default (debounced) mode.
 ///
 /// See [`Watcher::new`](trait.Watcher.html#tymethod.new).
-pub fn watcher(tx: Sender<DebouncedEvent>, delay: Duration) -> Result<RecommendedWatcher> {
+pub fn watcher(tx: Sender<RootMessage>, delay: Duration) -> Result<RecommendedWatcher> {
   Watcher::new(tx, delay)
 }
 

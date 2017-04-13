@@ -16,16 +16,17 @@ use utils::*;
 const DELAY_MS: u64 = 1000;
 const TIMEOUT_MS: u64 = 1000;
 
-fn recv_events_debounced(rx: &mpsc::Receiver<DebouncedEvent>) -> Vec<DebouncedEvent> {
+fn recv_events_debounced(rx: &mpsc::Receiver<fomo::RootMessage>) -> Vec<DebouncedEvent> {
   let start = Instant::now();
 
   let mut events = Vec::new();
 
   while start.elapsed() < Duration::from_millis(DELAY_MS + TIMEOUT_MS) {
     match rx.try_recv() {
-      Ok(event) => events.push(event),
+      Ok(fomo::RootMessage::Event(event)) => events.push(event),
       Err(mpsc::TryRecvError::Empty) => (),
       Err(e) => panic!("unexpected channel err: {:?}", e),
+      _ => panic!("got a query?"),
     }
     thread::sleep(Duration::from_millis(50));
   }
