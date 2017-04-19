@@ -152,8 +152,11 @@ fn watch_absolute_directory() {
   watcher.watch(&watch_path, RecursiveMode::Recursive).expect("failed to watch directory");
 
   sleep_windows(100);
+  sleep_macos(100);
 
   tdir.create("dir1/file1");
+
+  sleep_macos(100);
 
   if cfg!(target_os = "macos") {
     assert_eq!(recv_events_simple(&rx),
