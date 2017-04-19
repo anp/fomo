@@ -42,7 +42,7 @@ pub struct FileEvent {
 #[derive(Debug, Serialize)]
 pub struct Notification {
   changes: Vec<FileEvent>,
-  root: PathBuf,
+  root: Option<PathBuf>,
 }
 
 #[derive(Debug, Serialize)]
@@ -151,32 +151,18 @@ impl FsRootNode {
     }
   }
 
-  fn needs_notification(&self, node: &FsNode) -> bool {
+  fn matching_root_if_needs_notification(&self, node: &FsNode) -> Option<&Path> {
     for (ref root, expr) in &self.roots {
       if node.path.starts_with(root) && expr.matches(&node) {
-        return true;
+        return Some(root);
       }
     }
-    false
+    None
   }
 
   pub fn consume_event(&mut self, event: DebouncedEvent) -> Result<Option<Notification>> {
     let mut changes = Vec::new();
-    let event_root;
-
-    fn find_matching_root(
-      p: &PathBuf,
-      roots: &BTreeMap<PathBuf, QueryExpression>
-    ) -> Result<PathBuf> {
-      match roots.iter().map(|t| t.0).filter(|r| p.starts_with(r)).next() {
-        Some(r) => Ok(r.clone()),
-        None => {
-          bail!("lol adam is stupid, couldn't find {:?} in roots {:?}",
-                &p,
-                roots)
-        }
-      }
-    }
+    let mut event_root = None;
 
     match event {
       // TODO decide how to handle I/O notices vs. confirmations
@@ -186,64 +172,66 @@ impl FsRootNode {
       DebouncedEvent::Create(ref p) => {
         let node = FsNode::try_from_node_source(&p).chain_err(|| "constructing node from path")?;
 
-        if self.needs_notification(&node) {
+        if let Some(root) = self.matching_root_if_needs_notification(&node) {
           changes.push(FileEvent {
             event: ChangeEvent::Create,
             file: FileResult::make(&node),
           });
+
+          event_root = Some(root.to_owned());
         }
 
         self.insert_node(node)?;
-        event_root = find_matching_root(p, &self.roots)?;
       }
 
       DebouncedEvent::Write(ref p) => {
         let node = FsNode::try_from_node_source(&p).chain_err(|| "constructing node from path")?;
 
-        if self.needs_notification(&node) {
+        if let Some(root) = self.matching_root_if_needs_notification(&node) {
           changes.push(FileEvent {
             event: ChangeEvent::Write,
             file: FileResult::make(&node),
           });
+          event_root = Some(root.to_owned());
         }
 
         self.insert_node(node)?;
-        event_root = find_matching_root(p, &self.roots)?;
       }
 
       DebouncedEvent::Chmod(ref p) => {
         let node = FsNode::try_from_node_source(&p).chain_err(|| "constructing node from path")?;
 
-        if self.needs_notification(&node) {
+        if let Some(root) = self.matching_root_if_needs_notification(&node) {
           changes.push(FileEvent {
             event: ChangeEvent::Metadata,
             file: FileResult::make(&node),
           });
+          event_root = Some(root.to_owned());
         }
 
         self.insert_node(node)?;
-        event_root = find_matching_root(p, &self.roots)?;
       }
 
       DebouncedEvent::Remove(ref p) => {
-
         if let Some(old_node) = self.remove_node(p) {
-          if self.needs_notification(&old_node) {
+          if let Some(root) = self.matching_root_if_needs_notification(&old_node) {
             changes.push(FileEvent {
               event: ChangeEvent::Delete,
               file: FileResult::make(&old_node),
             });
+            event_root = Some(root.to_owned());
           }
         }
-
-        event_root = find_matching_root(p, &self.roots)?;
       }
 
       DebouncedEvent::Rename(ref p, ref to) => {
         let new_node =
           FsNode::try_from_node_source(&to).chain_err(|| "constructing node from path")?;
 
-        if self.needs_notification(&new_node) {
+        // FIXME(dikaiosune) the event_root should probably always be initialized
+        event_root = None;
+
+        if let Some(_) = self.matching_root_if_needs_notification(&new_node) {
           changes.push(FileEvent {
             event: ChangeEvent::Create,
             file: FileResult::make(&new_node),
@@ -253,15 +241,14 @@ impl FsRootNode {
         self.insert_node(new_node).unwrap();
 
         if let Some(old_node) = self.remove_node(p) {
-          if self.needs_notification(&old_node) {
+          if let Some(root) = self.matching_root_if_needs_notification(&old_node) {
             changes.push(FileEvent {
               event: ChangeEvent::Delete,
               file: FileResult::make(&old_node),
             });
+            event_root = Some(root.to_owned());
           }
         }
-
-        event_root = find_matching_root(p, &self.roots)?;
       }
 
       DebouncedEvent::Rescan => {
@@ -280,7 +267,7 @@ impl FsRootNode {
 
         // TODO segment this into multiple notifications, one per root?
 
-        event_root = PathBuf::new();
+        event_root = None;
       }
 
       DebouncedEvent::Error(e, opt_p) => {
