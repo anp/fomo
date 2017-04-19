@@ -311,6 +311,7 @@ impl FsRootNode {
     // we only have one client right now, so the filesystem view should have very low overhead
     // compared to what watchman does, so i don't think we need generators
     let files = self.iter()
+      .filter(|n| n.path.starts_with(&query.root))
       .filter(|n| query.expr.matches(n))
       .map(|n| FileResult::make(n))
       .collect::<Vec<_>>();
@@ -474,7 +475,8 @@ impl FsNode {
     });
 
     match &self.entry {
-      &FsEntryType::RootRoot { ref children } => {
+      &FsEntryType::RootRoot { ref children } |
+      &FsEntryType::Directory { ref children } => {
         for node in children.values() {
           node.gen_events_for_self_and_children(event, changes);
         }
