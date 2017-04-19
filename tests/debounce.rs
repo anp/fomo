@@ -272,6 +272,8 @@ fn create_rename_delete_file() {
   sleep_macos(10);
   tdir.remove("file2");
 
+  sleep_macos(DELAY_MS);
+
   assert_eq!(recv_events_debounced(&rx), vec![]);
 }
 
