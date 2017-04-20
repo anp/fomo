@@ -1,0 +1,25 @@
+{
+  "name": "fomo",
+  "version": "0.1.0",
+  "description": "Watch filesystem events.",
+  "main": "index.js",
+  "directories": {
+    "test": "tests"
+  },
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/dikaiosune/fomo.git"
+  },
+  "author": "Adam Perry <adam.n.perry@gmail.com>",
+  "license": "MIT",
+  "bugs": {
+    "url": "https://github.com/dikaiosune/fomo/issues"
+  },
+  "homepage": "https://github.com/dikaiosune/fomo#readme",
+  "dependencies": {
+    "uuid": "^3.0.1"
+  }
+}
