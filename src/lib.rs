@@ -44,7 +44,6 @@ extern crate filetime;
 #[cfg(test)]
 extern crate tempdir;
 
-use std::collections::BTreeMap;
 use std::io::prelude::*;
 use std::sync::mpsc::channel;
 use std::time::Duration;
@@ -73,14 +72,9 @@ mod times;
 
 use errors::*;
 
-const ERROR_TYPE_KEY: &'static str = "error";
-const HUMAN_ERROR_KEY: &'static str = "humanError";
-const QUERY_STRING_KEY: &'static str = "queryString";
-const ID_KEY: &'static str = "id";
-
 #[derive(Debug)]
 pub enum RootMessage {
-  Query(BTreeMap<&'static str, String>, query::Query),
+  Query(query::QueryError, query::Query),
   Event(notify::DebouncedEvent),
 }
 
@@ -150,7 +144,7 @@ pub fn run_for_realsies<R>(stdin: R) -> Result<()>
               }
             }
           }
-          RootMessage::Query(mut error_map, query) => {
+          RootMessage::Query(mut error, query) => {
             let to_watch = if query.watch {
               Some(query.root.clone())
             } else {
@@ -172,11 +166,10 @@ pub fn run_for_realsies<R>(stdin: R) -> Result<()>
               }
               Err(why) => {
                 error!("Unable to evaluate query: {:?}", why);
-                error_map.insert(ERROR_TYPE_KEY, "eval".to_string());
-                error_map.insert(HUMAN_ERROR_KEY,
-                                 format!("Problem evaluating query: {:?}", why));
+                error.error = Some("eval".to_string());
+                error.human_error = Some(format!("Problem evaluating query: {:?}", why));
 
-                match serde_json::to_string(&error_map) {
+                match serde_json::to_string(&error) {
                   Ok(s) => {
                     match fs_stdout_tx.send(s) {
                       Ok(_) => (),
@@ -223,39 +216,42 @@ pub fn run_for_realsies<R>(stdin: R) -> Result<()>
       let input = input.chain_err(|| "reading from stdin")?;
 
       // build this incrementally at each stage in case we need to send it back
-      let mut error_map = BTreeMap::new();
-      error_map.insert(QUERY_STRING_KEY, input.clone());
+      let mut error = query::QueryError {
+        id: None,
+        error: None,
+        human_error: None,
+        query_string: input.clone(),
+      };
 
       let query: query::Query = match serde_json::from_str(&input) {
         Ok(q) => q,
         Err(why) => {
 
           error!("Parsing query failed: {:?}. Query string: '{}'", why, input);
-          error_map.insert(ERROR_TYPE_KEY, "parse".to_string());
+          error.error = Some("parse".to_string());
 
           // let's see if we can find the id of the query at least
           match serde_json::from_str::<query::PartialQuery>(&input) {
             Ok(p) => {
-              error_map.insert(ID_KEY, p.id);
-              error_map.insert(HUMAN_ERROR_KEY,
-                               format!("Unable to parse query object: {:?}", why));
+              error.id = Some(p.id);
+              error.human_error = Some(format!("Unable to parse query object: {:?}", why));
             }
             Err(why) => {
               error!("Unable to retrieve id from query string: {:?}", why);
-              error_map.insert(HUMAN_ERROR_KEY,
-                               format!("Unable to parse query or even id from query object: {:?}",
-                                       why));
+              error.human_error = Some(format!("Unable to parse query or even id from query \
+                                                object: {:?}",
+                                               why));
             }
           }
 
-          err_stdout_tx.send(serde_json::to_string(&error_map)?)?;
+          err_stdout_tx.send(serde_json::to_string(&error)?)?;
           continue;
         }
       };
 
-      error_map.insert(ID_KEY, query.id.clone());
+      error.id = Some(query.id.clone());
 
-      match root_tx.send(RootMessage::Query(error_map, query)) {
+      match root_tx.send(RootMessage::Query(error, query)) {
         Ok(_) => (),
         Err(why) => {
           error!("mpsc send failed: {:?}", why);
@@ -265,18 +261,4 @@ pub fn run_for_realsies<R>(stdin: R) -> Result<()>
     }
     Ok(())
   })
-}
-
-#[derive(Deserialize, Serialize)]
-struct StartupMessage {
-  sync_port: u16,
-  ws_port: u16,
-  error: Option<StartError>,
-  error_human: String,
-}
-
-#[derive(Deserialize, Serialize)]
-enum StartError {
-  PortUnavailable,
-  PlatformUnsupported,
 }

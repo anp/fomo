@@ -27,9 +27,13 @@ pub struct FsNode {
 
 #[derive(Clone, Copy, Debug, Serialize)]
 pub enum ChangeEvent {
+  #[serde(rename(serialize = "create"))]
   Create,
+  #[serde(rename(serialize = "delete"))]
   Delete,
+  #[serde(rename(serialize = "write"))]
   Write,
+  #[serde(rename(serialize = "metadata"))]
   Metadata,
 }
 

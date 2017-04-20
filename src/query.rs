@@ -41,6 +41,16 @@ pub struct QueryResult {
 }
 
 #[derive(Debug, Serialize)]
+pub struct QueryError {
+  pub error: Option<String>,
+  #[serde(rename(serialize = "humanError"))]
+  pub human_error: Option<String>,
+  #[serde(rename(serialize = "queryString"))]
+  pub query_string: String,
+  pub id: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
 pub struct FileResult {
   path: PathBuf,
   name: String,
@@ -100,7 +110,7 @@ pub enum QueryExpression {
   /// The optional `field` can be used to specify whether to compare to only a
   /// single metadata field.
   #[serde(rename="since")]
-  Since { time: DateTime<Local>, },
+  Since(DateTime<Local>),
 
   /// Returns the result of performing the comparison with the current file
   /// size as the left-hand
@@ -186,7 +196,7 @@ impl QueryExpression {
         }
       }
 
-      &QueryExpression::Since { time } => node.mtime >= time,
+      &QueryExpression::Since(time) => node.mtime >= time,
 
       &QueryExpression::Size { cmp, bytes } => {
         match node.entry {
