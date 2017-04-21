@@ -1,0 +1,30 @@
+{
+  "extends": [
+    "plugin:flowtype/recommended",
+    "prettier",
+    "prettier/flowtype",
+    "prettier/react"
+  ],
+  "plugins": [
+    "flowtype",
+    "prettier"
+  ],
+  "globals": {
+    "document": false
+  },
+  "parserOptions": {
+    "ecmaVersion": 2016
+  },
+  "env": {
+    "node": true
+  },
+  "rules": {
+    "no-duplicate-imports": 0,
+    "prettier/prettier": ["error", {
+      "tabWidth": 2,
+      "printWidth": 100,
+      "singleQuote": true,
+      "trailingComma": "es5"
+    }]
+  }
+}

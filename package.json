@@ -21,5 +21,13 @@
   "homepage": "https://github.com/dikaiosune/fomo#readme",
   "dependencies": {
     "uuid": "^3.0.1"
+  },
+  "devDependencies": {
+    "babel-eslint": "^7.2.2",
+    "eslint": "^3.19.0",
+    "eslint-config-prettier": "^1.7.0",
+    "eslint-plugin-flowtype": "^2.32.1",
+    "eslint-plugin-prettier": "^2.0.1",
+    "prettier": "^1.2.2"
   }
 }
