@@ -118,22 +118,24 @@ pub fn run_for_realsies<R>(stdin: R) -> Result<()>
         match msg {
           RootMessage::Event(event) => {
             match fs.consume_event(event) {
-              Ok(Some(notif)) => {
-                match serde_json::to_string(&notif) {
-                  Ok(s) => {
-                    match fs_stdout_tx.send(s) {
-                      Ok(_) => (),
-                      Err(why) => {
-                        error!("mpsc send failed! {:?}", why);
-                        ::std::process::exit(1);
+              Ok(Some(notifs)) => {
+                for notif in notifs {
+                  match serde_json::to_string(&notif) {
+                    Ok(s) => {
+                      match fs_stdout_tx.send(s) {
+                        Ok(_) => (),
+                        Err(why) => {
+                          error!("mpsc send failed! {:?}", why);
+                          ::std::process::exit(1);
+                        }
                       }
                     }
-                  }
-                  Err(why) => {
-                    error!("unable to encode notification ({:?}) as JSON: {:?}",
-                           notif,
-                           why);
-                    ::std::process::exit(1);
+                    Err(why) => {
+                      error!("unable to encode notification ({:?}) as JSON: {:?}",
+                             notif,
+                             why);
+                      ::std::process::exit(1);
+                    }
                   }
                 }
               }

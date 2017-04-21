@@ -52,7 +52,7 @@ pub struct QueryError {
 
 #[derive(Debug, Serialize)]
 pub struct FileResult {
-  path: PathBuf,
+  pub path: PathBuf,
   name: String,
   mtime: DateTime<Local>,
   len: u64,

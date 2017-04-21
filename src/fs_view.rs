@@ -46,7 +46,7 @@ pub struct FileEvent {
 #[derive(Debug, Serialize)]
 pub struct Notification {
   changes: Vec<FileEvent>,
-  root: Option<PathBuf>,
+  root: PathBuf,
 }
 
 #[derive(Debug, Serialize)]
@@ -164,7 +164,7 @@ impl FsRootNode {
     None
   }
 
-  pub fn consume_event(&mut self, event: DebouncedEvent) -> Result<Option<Notification>> {
+  pub fn consume_event(&mut self, event: DebouncedEvent) -> Result<Option<Vec<Notification>>> {
     let mut changes = Vec::new();
     let mut event_root = None;
 
@@ -269,9 +269,29 @@ impl FsRootNode {
         self.base.diff(&new_fake_root.base, &mut changes);
         self.base = new_fake_root.base;
 
-        // TODO segment this into multiple notifications, one per root?
+        // segment this into multiple notifications, one per root?
+        let mut segments = BTreeMap::new();
 
-        event_root = None;
+        for notif in changes {
+          let notif_path = notif.file.path.clone();
+          for (ref root, _) in &self.roots {
+            if notif_path.starts_with(root) {
+              segments.entry(root.clone()).or_insert_with(|| Vec::new()).push(notif);
+              break;
+            }
+          }
+        }
+
+        let notifications = segments.into_iter()
+          .map(|(r, c)| {
+            Notification {
+              changes: c,
+              root: (*r).to_owned(),
+            }
+          })
+          .collect();
+
+        return Ok(Some(notifications));
       }
 
       DebouncedEvent::Error(e, opt_p) => {
@@ -279,10 +299,14 @@ impl FsRootNode {
       }
     }
 
-    Ok(Some(Notification {
-      changes: changes,
-      root: event_root,
-    }))
+    if let Some(root) = event_root {
+      Ok(Some(vec![ Notification {
+                      changes: changes,
+                      root: root,
+                    } ]))
+    } else {
+      Ok(None)
+    }
   }
 
   pub fn eval(&mut self, query: Query) -> Result<QueryResult> {
